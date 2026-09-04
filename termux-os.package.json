@@ -1,0 +1,86 @@
+{
+  "schema": "termux-os.package.v1",
+  "id": "github.termux-os.service.hf-model-manager",
+  "name": "HF Model Manager",
+  "version": "0.2.0",
+  "description": "Shared Hugging Face model/asset manager: one catalog, one installed inventory, one place that knows which model this device can actually run, who depends on it, and whether it is safe to delete",
+  "types": [
+    "service"
+  ],
+  "compatibility": {
+    "framework": ">=0.2.27"
+  },
+  "entrypoints": {
+    "backend": "package.mjs",
+    "webui": "web/index.html"
+  },
+  "admin": {
+    "title": "HF Model Manager"
+  },
+  "verification": {
+    "device": {
+      "command": "node scripts/verify-device.mjs",
+      "timeout_ms": 120000,
+      "requires_running": true
+    }
+  },
+  "components": {
+    "services": [
+      "hf-model-manager"
+    ],
+    "actions": [
+      "assets.manager.query"
+    ],
+    "apps": []
+  },
+  "capabilities": {
+    "provides": [
+      {
+        "id": "termux-os.assets.manager",
+        "provider": "hf-model-manager",
+        "kind": "action",
+        "action": "assets.manager.query"
+      },
+      {
+        "id": "termux-os.assets.inventory",
+        "provider": "hf-model-manager",
+        "kind": "feed",
+        "service": "hf-model-manager",
+        "endpoint": "/api/packages/github.termux-os.service.hf-model-manager/events",
+        "format": "jsonl-cursor"
+      }
+    ],
+    "requires": []
+  },
+  "menu": [
+    {
+      "parent": "/admin/services",
+      "path": "/packages/github.termux-os.service.hf-model-manager/",
+      "title": "HF Model Manager",
+      "order": 110
+    }
+  ],
+  "ports": [
+    {
+      "id": "http",
+      "protocol": "http",
+      "visibility": "loopback",
+      "health": "/health"
+    }
+  ],
+  "runtime": {
+    "framework": {
+      "commands": [
+        "node"
+      ]
+    },
+    "termux_packages": [],
+    "bundled": [],
+    "external": []
+  },
+  "release": {
+    "repository": "https://github.com/johnson-yo/termux-os-framework",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/johnson-yo/termux-os-framework"
+  }
+}

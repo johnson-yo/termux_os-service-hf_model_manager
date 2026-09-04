@@ -1,0 +1,18 @@
+.runtime-dev/
+node_modules/
+coverage/
+tmp/
+backup/
+models/
+data/
+*.db
+*.sqlite*
+*.part
+*.log
+*.wav
+.env
+.env.*
+
+# Development checkpoint and SDK state: working tree only.
+HANDOFF.md
+.sdk/

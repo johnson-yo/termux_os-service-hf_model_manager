@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>模型管理 <a class="back" href="/admin">← 管理员首页</a></h1>
+    <!--
+      ⭐ 首屏统计数的是**模型**（§6），⛔ 不是内部 artifact。
+      「8/12 已安装」回答的是一个使用者从来没问过的问题。
+    -->
+    <p id="summary" class="note">正在读取…</p>
+  </header>
+
+  <!--
+    ⛔ 这一页不问凭证。认证走 Framework Browser Session（`window.TermuxOS.api`）。
+    ⭐ 第一屏只回答五件事：模型在不在、能不能用、版本是什么、怎么下载、怎么删。
+    ⛔ CTX / EPContext / QNN / HTP v73 / asset id / 绝对路径 / sha256
+       一个都不出现在主卡上——它们在「高级信息」里。
+  -->
+  <section class="card">
+    <h2>我的模型</h2>
+    <div id="models"><p class="note">尚未读取。</p></div>
+  </section>
+
+  <!--
+    ⭐ 没有操作时**整块不存在**（§15）。
+    一张常驻的「没有正在进行的操作」卡，占掉的是第一屏最贵的位置。
+  -->
+  <section class="card" id="ops-card" hidden>
+    <h2>进行中</h2>
+    <div id="ops"></div>
+  </section>
+
+  <details class="card" id="advanced">
+    <summary>高级</summary>
+    <p class="note tiny">下面是开发与排障用的内部视图。普通使用不需要打开。</p>
+
+    <details>
+      <summary>本机与数据来源</summary>
+      <p id="device" class="note tiny">—</p>
+      <p id="sources" class="note tiny">—</p>
+      <button id="hard-refresh" class="ghost">重新取</button>
+    </details>
+
+    <details>
+      <summary>资产详情<span id="assets-sum" class="note tiny"></span></summary>
+      <div id="assets"></div>
+    </details>
+
+    <details>
+      <summary>历史目录（未纳管）<span id="unmanaged-sum" class="note tiny"></span></summary>
+      <p class="note tiny">
+        这些目录在共享模型目录下，但不在 Framework 的资产账本里——多半是早期手工放进去的。
+        ⛔ 本页不猜它们是什么，也不提供自动清理。
+      </p>
+      <div id="unmanaged"><p class="note">尚未扫描。</p></div>
+      <button id="scan" class="ghost">扫描</button>
+    </details>
+  </details>
+</main>
+<script src="/admin/session.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
