@@ -1,0 +1,44 @@
+# hf-model-manager — raw-only Package L2
+
+Parent: `/mnt/2tb/termux-os/AGENTS.md` and `GEB_rule.md`.
+
+This Package manages approved raw model package metadata and files. It does not
+implement consumer/runtime policy. Before changing code, read
+`docs/105_hf_model_manager_boundary_and_framework_investigation.md` and the
+current raw contract in `docs/CONSUMER_API.md`.
+
+## Boundary
+
+- Registry supplies real `source`, repository, package identity, approved
+  version/revision, file list, sizes, and sha256.
+- Framework Core owns raw Asset download/resume/retry/progress, verification,
+  shared-store paths, generic archive import, and generic purge.
+- `.models/<owner>/<repository>` is read through Framework's current
+  declaration seam. This Package does not persist a consumer ledger.
+- The Package never writes the shared model store directly and never deletes
+  adjacent consumer caches.
+- Do not modify termux-speech business code in this Package task. Record its
+  migration needs in the final numbered report instead.
+
+## API/UI contract
+
+The WebUI has exactly two top-level sections: Overview and Models. Model cards
+contain collapsible Meta, Usage, and Files groups. Raw file absolute paths may
+be shown; generated runtime artifacts and runtime readiness are out of scope.
+
+Every new route must be registered in `package.mjs`, implemented in
+`service/main.mjs`, documented in `README.md` and `docs/CONSUMER_API.md`, and
+covered by `test/run-all.mjs`.
+
+## Verification
+
+```sh
+node test/run-all.mjs
+node scripts/verify-device.mjs
+```
+
+The Manager is a local development candidate in this round. It is not a
+formal GitHub/Cloudflare release. Framework Core changes are formal only after
+its complete `npm test`, publication check, commit/push, and Registry readback.
+
+[PROTOCOL]: Update this file when the Package boundary or directory contract changes.

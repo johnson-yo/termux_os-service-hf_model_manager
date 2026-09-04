@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raw Model Packages</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <h1>Raw Model Packages <a class="back" href="/admin">← 管理首页</a></h1>
+    <p id="summary" class="note">读取中…</p>
+  </header>
+
+  <section id="overview" class="card">
+    <h2>Overview</h2>
+    <div id="overview-grid" class="facts"></div>
+    <p id="refresh-status" class="note"></p>
+    <div id="operations" hidden></div>
+  </section>
+
+  <section id="models" class="card">
+    <div class="row between">
+      <h2>Models</h2>
+      <button id="refresh" class="ghost">刷新</button>
+    </div>
+    <div class="import-box">
+      <label for="archive">导入原始模型包归档</label>
+      <div class="row">
+        <input id="archive" type="file" accept=".tar.gz,.tgz,application/gzip">
+        <button id="import">导入</button>
+      </div>
+      <p class="note tiny">归档由 Framework 校验身份、文件大小、sha256 与原子落盘。</p>
+    </div>
+    <div id="package-list"><p class="note">尚未读取。</p></div>
+  </section>
+</main>
+<script src="/admin/session.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

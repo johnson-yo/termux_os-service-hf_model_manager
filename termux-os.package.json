@@ -1,0 +1,86 @@
+{
+  "schema": "termux-os.package.v1",
+  "id": "github.termux-os.service.hf-model-manager",
+  "name": "Raw Model Package Manager",
+  "version": "0.3.0",
+  "description": "Raw-only model package catalog and file manager: Registry metadata, Framework-owned transfer, local file status, archive import, and safe deletion",
+  "types": [
+    "service"
+  ],
+  "compatibility": {
+    "framework": ">=0.3.2"
+  },
+  "entrypoints": {
+    "backend": "package.mjs",
+    "webui": "web/index.html"
+  },
+  "admin": {
+    "title": "Raw Model Package Manager"
+  },
+  "verification": {
+    "device": {
+      "command": "node scripts/verify-device.mjs",
+      "timeout_ms": 120000,
+      "requires_running": true
+    }
+  },
+  "components": {
+    "services": [
+      "hf-model-manager"
+    ],
+    "actions": [
+      "assets.manager.query"
+    ],
+    "apps": []
+  },
+  "capabilities": {
+    "provides": [
+      {
+        "id": "termux-os.assets.manager",
+        "provider": "hf-model-manager",
+        "kind": "action",
+        "action": "assets.manager.query"
+      },
+      {
+        "id": "termux-os.assets.inventory",
+        "provider": "hf-model-manager",
+        "kind": "feed",
+        "service": "hf-model-manager",
+        "endpoint": "/api/packages/github.termux-os.service.hf-model-manager/events",
+        "format": "jsonl-cursor"
+      }
+    ],
+    "requires": []
+  },
+  "menu": [
+    {
+      "parent": "/admin/services",
+      "path": "/packages/github.termux-os.service.hf-model-manager/",
+      "title": "Raw Model Packages",
+      "order": 110
+    }
+  ],
+  "ports": [
+    {
+      "id": "http",
+      "protocol": "http",
+      "visibility": "loopback",
+      "health": "/health"
+    }
+  ],
+  "runtime": {
+    "framework": {
+      "commands": [
+        "node"
+      ]
+    },
+    "termux_packages": [],
+    "bundled": [],
+    "external": []
+  },
+  "release": {
+    "repository": "https://github.com/johnson-yo/termux_os-service-hf_model_manager",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/johnson-yo/termux_os-service-hf_model_manager"
+  }
+}
