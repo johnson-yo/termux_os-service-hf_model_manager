@@ -1,4 +1,4 @@
-# Dependency maturity — Raw Model Package Manager 0.3.0 development candidate
+# Dependency maturity — Raw Model Package Manager 0.3.1 development candidate
 
 The manager is optional by design. It improves discovery and lifecycle UX but
 is not required for a consumer to access its own declared raw Asset.
@@ -11,6 +11,7 @@ is not required for a consumer to access its own declared raw Asset.
 | manager service unavailable | Framework proxy returns 502 | keep the consumer path independent |
 | Registry unavailable | package cards are `unknown` | do not call them `none`; retry later |
 | Framework inventory unavailable | local status is `unknown` | do not delete or claim completeness |
+| Framework is still booting | a failed snapshot is retried after a short backoff | do not keep the startup failure cached |
 | malformed `.models` path | declaration error is visible | fix the owning Package; do not infer usage |
 | current declaration exists | delete returns `package_in_use` | remove the declaration through the consumer lifecycle |
 | raw archive conflict | Framework import returns a conflict | preserve existing bytes and choose the correct archive |

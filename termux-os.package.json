@@ -2,7 +2,7 @@
   "schema": "termux-os.package.v1",
   "id": "github.termux-os.service.hf-model-manager",
   "name": "Raw Model Package Manager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Raw-only model package catalog and file manager: Registry metadata, Framework-owned transfer, local file status, archive import, and safe deletion",
   "types": [
     "service"

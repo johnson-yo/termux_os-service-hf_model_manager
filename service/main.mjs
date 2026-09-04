@@ -18,6 +18,8 @@ import { buildModelPackages, findModelPackage } from './model-packages.mjs';
 import { Operations, STAGES } from './operations.mjs';
 import { EventLog } from './events.mjs';
 
+const CACHE_TTL_MS = 5 * 60_000;
+const FAILURE_RETRY_MS = 2_000;
 const PORT = Number(process.env.PORT || process.env.PORT_HTTP || 0);
 const STATUS_FILE = process.env.STATUS_FILE || '';
 const STORE = process.env.SHARED_ASSET_STORE || '/sdcard/termux-os/models';
@@ -62,7 +64,9 @@ class SnapshotStore {
 
   async refresh({ force = false } = {}) {
     if (this.inFlight) return this.inFlight;
-    if (!force && this.value && Date.now() - this.lastRefreshAtMs < 5 * 60_000) return this.value;
+    const age = this.lastRefreshAtMs === null ? null : Date.now() - this.lastRefreshAtMs;
+    const cacheTtl = this.lastError ? FAILURE_RETRY_MS : CACHE_TTL_MS;
+    if (!force && this.value && age !== null && age < cacheTtl) return this.value;
     this.inFlight = (async () => {
       try {
         const [catalog, inventory, declarations, manifests, device] = await Promise.all([
@@ -92,7 +96,12 @@ class SnapshotStore {
     return this.inFlight;
   }
 
-  async ensure() { return this.value ? this.value : this.refresh({ force: true }); }
+  async ensure() {
+    if (!this.value) return this.refresh({ force: true });
+    const age = this.lastRefreshAtMs === null ? null : Date.now() - this.lastRefreshAtMs;
+    if (this.lastError && (age === null || age >= FAILURE_RETRY_MS)) return this.refresh({ force: true });
+    return this.value;
+  }
 
   snapshot() {
     const age = this.lastRefreshAtMs === null ? null : Date.now() - this.lastRefreshAtMs;
