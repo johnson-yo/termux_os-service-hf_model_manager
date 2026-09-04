@@ -1,21 +1,21 @@
 {
   "schema": "termux-os.package.v1",
   "id": "github.termux-os.service.hf-model-manager",
-  "name": "Raw Model Package Manager",
-  "version": "0.3.1",
-  "description": "Raw-only model package catalog and file manager: Registry metadata, Framework-owned transfer, local file status, archive import, and safe deletion",
+  "name": "模型管理",
+  "version": "0.4.0",
+  "description": "Raw-only model package catalog and file manager: Registry file metadata, Framework-owned transfer, local file status, archive import, and safe deletion",
   "types": [
     "service"
   ],
   "compatibility": {
-    "framework": ">=0.3.2"
+    "framework": ">=0.3.3"
   },
   "entrypoints": {
     "backend": "package.mjs",
     "webui": "web/index.html"
   },
   "admin": {
-    "title": "Raw Model Package Manager"
+    "title": "模型管理"
   },
   "verification": {
     "device": {
@@ -56,7 +56,7 @@
     {
       "parent": "/admin/services",
       "path": "/packages/github.termux-os.service.hf-model-manager/",
-      "title": "Raw Model Packages",
+      "title": "模型管理",
       "order": 110
     }
   ],

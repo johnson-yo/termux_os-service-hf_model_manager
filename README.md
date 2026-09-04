@@ -1,9 +1,9 @@
-# Raw Model Package Manager
+# 模型管理
 
 `github.termux-os.service.hf-model-manager` is the local raw model package
-catalog and file manager. One package is one approved Registry project and its
-real source/repository identity. Every approved raw file is shown inside that
-package card, including multifile packages.
+catalog and file manager. One package card is one approved Registry project and
+its real source/repository identity. Every approved raw file is shown inside
+that package card, including multifile and multi-source packages.
 
 This package does not prepare, execute, or decide readiness for any consumer.
 It does not own a second model ledger, write the shared model store directly,
@@ -14,7 +14,8 @@ archive import, and generic raw purge. Consumers own their own runtime policy.
 
 ## Identity and local declarations
 
-The Registry identity is `source + repository + package_id`. The package
+The Registry identity is `(source, repository)`; `package_id` is displayed as
+the stable package identifier and is never parsed to infer source. The package
 version and upstream revision are separate fields: a semver package version is
 not compared with a Git revision. A Registry project without an explicit
 `package_id` is an upstream allow-list entry, not an installable model package.
@@ -50,6 +51,18 @@ The Framework package prefix is:
 | POST | `/package/import` | stream a `tar.gz` raw Asset archive to Framework |
 | GET | `/operations` and `/operation?id=...` | operation state and real byte progress |
 | GET | `/events?after=...` | bounded cursor feed |
+
+Each Registry file carries `source`, `repository`, immutable `revision`,
+`remote_path`, `local_path`, size, SHA-256, and optional `role`. The Manager
+does not scan an upstream tree, guess a basename, or add a file from a local
+manifest. A manifest only maps an approved file to its Framework Asset
+provider. `total_bytes` and `downloaded_bytes` are package-card fields;
+operation snapshots additionally expose real `speed_bps` and `current_file`.
+
+The WebUI has exactly two top-level sections: `概览` and `模型`. Cards expose
+`基本信息`, `占用情况`, and `文件`, with `下载`, `继续下载`, `重试`, and `删除`
+actions. “占用情况” means the current `.models` declaration scan; an empty
+scan is shown as `没有当前声明的使用者`.
 
 The capability `termux-os.assets.manager` exposes the same read and lifecycle
 operations without hard-coding this Package id. Consumers should make the

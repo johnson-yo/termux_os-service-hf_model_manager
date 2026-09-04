@@ -1,7 +1,7 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
  * [INPUT]: Framework Browser Session API and raw model-package JSON responses.
- * [OUTPUT]: The two-section Overview/Models manager UI.
+ * [OUTPUT]: The two-section 概览/模型 manager UI.
  * [POS]: hf-model-manager/web/app.js.
  * [PROTOCOL]: Show package metadata, usage, raw files, and real operations only.
  */
@@ -61,7 +61,9 @@ const operationText = (operation) => {
   const progress = Number.isFinite(Number(operation.progress)) ? ` · ${Math.round(Number(operation.progress))}%` : '';
   const bytesText = Number.isFinite(Number(operation.bytes_total)) && Number(operation.bytes_total) > 0
     ? ` · ${bytes(operation.bytes_done)} / ${bytes(operation.bytes_total)}` : '';
-  return `${stageLabel[operation.stage] ?? operation.stage ?? operation.state}${progress}${bytesText}`;
+  const speed = Number.isFinite(Number(operation.speed_bps)) && Number(operation.speed_bps) > 0
+    ? ` · ${bytes(operation.speed_bps)}/s` : '';
+  return `${stageLabel[operation.stage] ?? operation.stage ?? operation.state}${progress}${bytesText}${speed}`;
 };
 
 const renderOperations = (data) => {
@@ -85,23 +87,31 @@ const renderPackages = (data) => {
     const canDownload = item.actions?.download && item.status !== 'complete';
     const canDelete = item.actions?.delete;
     const usage = item.usage?.consumers ?? [];
+    const totalBytes = item.total_bytes ?? item.registry?.raw_bytes;
+    const downloadedBytes = item.downloaded_bytes ?? 0;
     return `<article class="package-card" data-key="${esc(item.key)}">
       <div class="row between"><h3>${esc(item.display_name || item.repository)}</h3><span class="badge ${stateClass[item.status] ?? ''}">${esc(badge)}</span></div>
       <p class="note tiny">${esc(item.source)} · ${esc(item.repository)}</p>
+      <dl class="facts package-facts">
+        <dt>包版本</dt><dd>${esc(item.package_version ?? '—')}</dd>
+        <dt>状态</dt><dd>${esc(badge)}</dd>
+        <dt>总大小</dt><dd>${bytes(totalBytes)}</dd>
+        <dt>已下载</dt><dd>${bytes(downloadedBytes)}</dd>
+      </dl>
       <div class="row actions">
-        ${canDownload ? `<button data-action="download" data-key="${esc(item.key)}">${item.status === 'partial' ? '继续' : '下载'}</button>` : ''}
+        ${canDownload ? `<button data-action="download" data-key="${esc(item.key)}">${item.status === 'partial' ? '继续下载' : '下载'}</button>` : ''}
         ${item.status === 'error' ? `<button data-action="download" data-key="${esc(item.key)}">重试</button>` : ''}
-        ${canDelete ? `<button class="ghost" data-action="delete" data-key="${esc(item.key)}">删除本地文件</button>` : ''}
+        ${canDelete ? `<button class="ghost" data-action="delete" data-key="${esc(item.key)}">删除</button>` : ''}
       </div>
-      <details><summary>Meta</summary><dl class="facts">
+      <details><summary>基本信息</summary><dl class="facts">
         <dt>来源</dt><dd>${esc(item.source)}</dd><dt>仓库</dt><dd>${esc(item.repository)}</dd>
         <dt>Registry package_id</dt><dd class="path">${esc(item.package_id ?? '—')}</dd>
         <dt>包版本</dt><dd>${esc(item.package_version ?? '—')}</dd><dt>上游 revision</dt><dd class="path">${esc(item.upstream_revision ?? '—')}</dd>
       </dl></details>
-      <details><summary>Usage <span class="note tiny">(${usage.length})</span></summary>
+      <details><summary>占用情况 <span class="note tiny">(${usage.length})</span></summary>
         ${usage.length ? `<ul>${usage.map((entry) => `<li class="path">${esc(entry.package_id)} · ${esc(entry.path)}</li>`).join('')}</ul>` : '<p class="note tiny">没有当前声明的使用者。</p>'}
       </details>
-      <details><summary>Files <span class="note tiny">(${item.files?.length ?? 0} · ${bytes(item.registry?.raw_bytes)})</span></summary>
+      <details><summary>文件 <span class="note tiny">(${item.files?.length ?? 0} · ${bytes(item.registry?.raw_bytes)})</span></summary>
         ${(item.files ?? []).map(fileRow).join('') || '<p class="note tiny">没有已批准的原始文件。</p>'}
       </details>
     </article>`;

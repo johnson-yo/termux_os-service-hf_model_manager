@@ -28,8 +28,8 @@ for (const forbidden of ['/model/use', '/model/resolve', '/unmanaged', 'termux-o
 }
 const html = read('web/index.html');
 test('WebUI has exactly two top-level sections', (html.match(/<section\b/g) ?? []).length === 2);
-test('WebUI names Overview and Models', html.includes('id="overview"') && html.includes('id="models"'));
-for (const forbidden of ['advanced', 'executable', 'HTP', 'QNN', 'data-action="use"']) {
+test('WebUI names 概览 and 模型', html.includes('<h2>概览</h2>') && html.includes('<h2>模型</h2>'));
+for (const forbidden of ['advanced', 'executable', 'HTP', 'QNN', 'data-action="use"', '删除本地文件']) {
   test(`WebUI does not show ${forbidden}`, !source.includes(forbidden));
 }
 test('package route registers raw archive import', read('package.mjs').includes("streamProxy('POST', '/package/import')"));

@@ -19,12 +19,14 @@ const adapter = new FrameworkAssets({ base: 'http://core', key: 'system', fetchI
 } });
 await adapter.inventory();
 await adapter.modelDeclarations();
+await adapter.fetchPayload('asset.raw');
 await adapter.purgePayload('asset.raw', { package_id: 'pkg', version: '1.0.0', target: 'generic', path: '/store/pkg/1.0.0/generic/raw' });
 test('inventory uses Core Asset endpoint', calls[0].url === 'http://core/api/assets');
 test('declarations use a read-only Core seam', calls[1].url.endsWith('/api/packages/model-declarations') && calls[1].options.method === 'GET');
+test('download delegates direct-first/fallback policy to Core', calls[2].url.endsWith('/api/assets/asset.raw/fetch') && calls[2].options.method === 'POST');
 test('delete carries package/version/target/path expectations', (() => {
-  const body = JSON.parse(calls[2].options.body);
-  return calls[2].options.method === 'DELETE' && body.expected.version === '1.0.0' && body.expected.path.includes('/raw');
+  const body = JSON.parse(calls[3].options.body);
+  return calls[3].options.method === 'DELETE' && body.expected.version === '1.0.0' && body.expected.path.includes('/raw');
 })());
 
 const ops = new Operations({ now: (() => { let t = 1000; return () => ++t; })() });

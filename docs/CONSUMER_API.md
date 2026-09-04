@@ -37,9 +37,16 @@ format. Its endpoint is discovered from the capability descriptor and accepts
   "package_version": "2.0.0",
   "upstream_revision": "<revision>",
   "status": "complete|partial|none|unknown|error",
+  "total_bytes": 123,
+  "downloaded_bytes": 123,
   "files": [{
     "path": "model.onnx",
+    "local_path": "model.onnx",
     "remote_path": "graph/model.onnx",
+    "source": "huggingface",
+    "repository": "owner/repository",
+    "revision": "<immutable revision>",
+    "role": "model",
     "size": 123,
     "sha256": "...",
     "local": { "state": "complete|partial|none|error", "path": "..." }
@@ -48,9 +55,10 @@ format. Its endpoint is discovered from the capability descriptor and accepts
 }
 ```
 
-`source` and `repository` are Registry fields. The manager never derives them
-from `package_id`. `package_version` and `upstream_revision` are independent
-namespaces. Registry unavailability is `unknown`, not `none`; a partial file
+`source` and `repository` are Registry fields, both at card and file level. The
+manager never derives them from `package_id`. `package_version` and
+`upstream_revision` are independent namespaces. Registry unavailability is
+`unknown`, not `none`; a partial file
 or `.part` prefix is not complete; a size/hash failure is `error`.
 
 ## Lifecycle rules
@@ -61,6 +69,10 @@ or `.part` prefix is not complete; a size/hash failure is `error`.
 - The manager asks Framework to install a provider when the catalog supplies
   one, then asks Framework for raw payload transfer. It never constructs a
   download URL or writes `/sdcard/termux-os/models` itself.
+- The Registry file list is authoritative. A manifest can only associate an
+  approved file with a provider and exact relative path; it cannot add files.
+  This permits one package to merge multiple upstream repositories while
+  keeping every source/repository/revision/remote_path visible.
 - Delete is blocked while a current `.models` declaration names the package.
   Once allowed, the manager passes package/version/target/path expectations to
   Framework's generic purge boundary. No adjacent cache is touched.

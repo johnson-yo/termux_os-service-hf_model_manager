@@ -1,7 +1,7 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
  * [INPUT]: Public Package Registry `/list` data: approved package identities, revisions, files, and hashes.
- * [OUTPUT]: A source-faithful model-package catalog; no upstream identity or local state is invented.
+ * [OUTPUT]: A source-faithful model-package catalog with per-file provenance and local paths.
  * [POS]: hf-model-manager/service/cf.mjs.
  * [PROTOCOL]: Registry data is approved metadata only. Raw bytes and local ownership stay with Framework Core.
  */
@@ -11,8 +11,16 @@ export const DEFAULT_REGISTRY = 'https://package.termux-os.com';
 const normalizeFile = (file) => ({
   kind: file?.kind ?? null,
   name: typeof file?.name === 'string' ? file.name : null,
-  path: typeof file?.path === 'string' ? file.path : (typeof file?.name === 'string' ? file.name : null),
-  remote_path: typeof file?.remote_path === 'string' ? file.remote_path : null,
+  path: typeof file?.local_path === 'string' ? file.local_path
+    : (typeof file?.path === 'string' ? file.path : (typeof file?.name === 'string' ? file.name : null)),
+  local_path: typeof file?.local_path === 'string' ? file.local_path
+    : (typeof file?.path === 'string' ? file.path : (typeof file?.name === 'string' ? file.name : null)),
+  remote_path: typeof file?.remote_path === 'string' ? file.remote_path
+    : (typeof file?.file_path === 'string' ? file.file_path : null),
+  source: typeof file?.source === 'string' ? file.source : null,
+  repository: typeof file?.repository === 'string' ? file.repository : null,
+  revision: typeof file?.revision === 'string' ? file.revision : null,
+  role: typeof file?.role === 'string' ? file.role : null,
   size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
   sha256: typeof file?.sha256 === 'string' ? file.sha256.toLowerCase() : null,
 });
@@ -71,8 +79,14 @@ const byEvidence = (versions) => [...versions].sort((a, b) => {
   return at - bt;
 });
 
-export const latestRaw = (versions) => byEvidence(versions
-  .filter((version) => version.status === 'verified' && version.raw_files.length)).at(-1) ?? null;
+export const latestRaw = (versions) => {
+  const eligible = versions.filter((version) => version.status === 'verified' && version.raw_files.length);
+  // A package version is the installable catalog namespace. If the same
+  // project also has historical revision-only rows, never let a date compare
+  // make a raw revision masquerade as the current package version.
+  const semver = eligible.filter((version) => isSemver(version.version));
+  return byEvidence(semver.length ? semver : eligible).at(-1) ?? null;
+};
 
 export const latestInstallable = (versions) => byEvidence(versions
   .filter((version) => version.status === 'verified' && version.installable)).at(-1) ?? null;

@@ -19,7 +19,10 @@ const test = (name, condition) => { count += 1; console.log(`${condition ? 'PASS
 
 test('Overview is the first top-level section', html.indexOf('id="overview"') < html.indexOf('id="models"'));
 test('Models contains the archive import control', html.includes('id="archive"') && html.includes('id="import"'));
-test('cards have Meta, Usage, and Files disclosures', js.includes('>Meta<') && js.includes('>Usage') && js.includes('>Files'));
+test('cards have Chinese basic-info, usage, and file disclosures', js.includes('基本信息') && js.includes('占用情况') && js.includes('>文件'));
+test('cards expose total and downloaded byte fields', js.includes('total_bytes') && js.includes('downloaded_bytes'));
+test('operations expose real speed and current file', js.includes('speed_bps') && js.includes('current_file'));
+test('actions use the frozen Chinese labels', js.includes('继续下载') && js.includes('删除</button>') && js.includes('重试</button>'));
 test('download/continue/retry/delete actions use the package key', js.includes('data-action="download"') && js.includes('data-action="delete"')
   && js.includes('/package/${action}?id='));
 test('raw absolute file path is rendered', js.includes('local.path || local.part_path') && js.includes('class="path"'));

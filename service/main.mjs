@@ -207,15 +207,24 @@ const responseError = (result, fallback) => {
 
 const progressWatcher = (assetId, setProgress) => {
   let stopped = false;
+  let previous = null;
   const poll = async () => {
     if (stopped) return;
     try {
       const response = await local.fetchProgress(assetId);
       const progress = response.data?.progress;
-      if (progress) setProgress({
-        bytesDone: Number(progress.bytes_done), bytesTotal: Number(progress.bytes_total),
-        progress: Number(progress.progress), precision: 'bytes', currentFile: progress.current_file,
-      });
+      if (progress) {
+        const bytesDone = Number(progress.bytes_done);
+        const observedAt = Date.now();
+        const speedBps = previous && observedAt > previous.at && bytesDone >= previous.bytes
+          ? ((bytesDone - previous.bytes) * 1000) / (observedAt - previous.at) : null;
+        previous = { bytes: bytesDone, at: observedAt };
+        setProgress({
+          bytesDone, bytesTotal: Number(progress.bytes_total),
+          progress: Number(progress.progress), precision: 'bytes', currentFile: progress.current_file,
+          speedBps,
+        });
+      }
     } catch { /* the fetch result remains authoritative */ }
   };
   const timer = setInterval(() => { void poll(); }, 750);
@@ -225,8 +234,8 @@ const progressWatcher = (assetId, setProgress) => {
 };
 
 const downloadPackage = async (card, setStage, setProgress) => {
-  const candidates = card.assets?.length ? card.assets : (card.registry?.provides ?? []).map((id) => ({ id, installed: false }));
-  if (!candidates.length) throw new Error('raw package has no installed Asset provider');
+  const candidates = card.assets ?? [];
+  if (!candidates.length) throw new Error('raw package has no declared Asset provider');
   const results = [];
   for (const candidate of candidates) {
     if (!candidate.installed) {
@@ -235,9 +244,6 @@ const downloadPackage = async (card, setStage, setProgress) => {
       const failure = responseError(installed, `provider install failed for ${candidate.id}`);
       if (failure) throw failure;
       results.push({ id: candidate.id, provider: installed.data });
-      // Package installation may be an asynchronous Framework job. Report it
-      // instead of pretending the raw bytes are already present.
-      continue;
     }
     setStage('downloading');
     const stopWatching = progressWatcher(candidate.id, setProgress);
@@ -263,14 +269,19 @@ const verifyPackage = async (card) => {
     results.push({ id: asset.id, ok: result.asset?.ready === true, reason: result.asset?.reason ?? null });
   }
   await snapshots.refresh({ force: true });
-  return { package_key: card.key, assets: results, ok: results.every((item) => item.ok) };
+  return { package_key: card.key, assets: results, ok: results.length > 0 && results.every((item) => item.ok) };
 };
 
 const deletePackage = async (card, setStage) => {
   setStage('deleting');
   const removed = [];
+  const groups = new Map();
   for (const asset of card.assets ?? []) {
     if (!asset.installed || !asset.path) continue;
+    const identity = [asset.package_id, asset.version, asset.target, path.resolve(asset.path)].join('|');
+    if (!groups.has(identity)) groups.set(identity, asset);
+  }
+  for (const asset of groups.values()) {
     const result = await local.purgePayload(asset.id, {
       package_id: asset.package_id, version: asset.version, target: asset.target, path: asset.path,
     });
@@ -351,7 +362,9 @@ const server = http.createServer(async (req, res) => {
       const file = card?.files?.find((item) => item.path === filePath || item.remote_path === filePath);
       if (!file) return send(res, 404, { ok: false, error: 'unknown_raw_file' });
       return send(res, 200, { ok: true, package_key: card.key, source: card.source, repository: card.repository,
-        file: { path: file.path, remote_path: file.remote_path, size: file.size, sha256: file.sha256,
+        file: { path: file.path, local_path: file.local_path, remote_path: file.remote_path,
+          source: file.source, repository: file.repository, revision: file.revision, role: file.role,
+          size: file.size, sha256: file.sha256,
           local: file.local } });
     }
     if (route === '/assets' && req.method === 'GET') {
