@@ -214,6 +214,8 @@ let refreshInFlight = null;
 const refresh = () => {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
     try {
       const response = await api('/live');
       const data = await response.json();
@@ -221,6 +223,11 @@ const refresh = () => {
       renderOverview(data.overview, data.summary);
       renderPackages(data);
       renderOperations(data);
+      // Updating the overview grid and moving existing card nodes can trigger
+      // browser scroll anchoring differently on a formal Package page than in
+      // the small headless fixture. Restore the user's viewport explicitly;
+      // this is independent of preserving the stable card/details nodes.
+      window.scrollTo(scrollX, scrollY);
     } catch (error) {
       $('summary').textContent = `读取失败：${String(error?.message ?? error)}`;
     } finally {
