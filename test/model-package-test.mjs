@@ -81,7 +81,7 @@ const manifests = [
       { path: 'tokens.json', remote_path: 'tokens.json', host: 'huggingface', repo: 'kautism/SenseVoiceSmall-onnx', revision: rev('5'), size: 3, sha256: sha('c') },
     ] } },
     { id: 'model.sensevoice.graph', optional: true, payload: 'sense', files: { model: 'model.onnx' }, source: { files: [
-      { path: 'model.onnx', remote_path: 'graph/generic/model.onnx', host: 'huggingface', repo: 'johnson-yo/termux_os-asset-sensevoice-htp-onnx', revision: senseRevision, size: 3, sha256: sha('a') },
+      { path: 'model.onnx', remote_path: 'graph/generic/model.onnx', host: 'huggingface', repo: 'johnson-yo/termux_os-asset-sensevoice-htp-onnx', revision: rev('9'), size: 3, sha256: sha('a') },
       { path: 'stale.bin', remote_path: 'stale.bin', host: 'huggingface', repo: 'johnson-yo/termux_os-asset-sensevoice-htp-onnx', revision: senseRevision, size: 1, sha256: sha('z') },
     ] } },
   ] } } },
@@ -116,6 +116,8 @@ test('SenseVoice merges three source repositories into one package root', sense?
 test('SenseVoice provider root is shared but local paths are absolute', sense?.assets.length === 2
   && sense.assets.every((asset) => asset.path === senseRoot)
   && sense.files.every((file) => path.isAbsolute(file.local.path)));
+test('SenseVoice maps a revision-drifted manifest only by exact bytes and path', sense?.files.find((file) => file.path === 'model.onnx')?.asset_ids.includes('model.sensevoice.graph')
+  && sense.assets.find((asset) => asset.id === 'model.sensevoice.graph')?.optional === true);
 test('manifest-only stale file is not added to the Registry file list', !sense?.files.some((file) => file.path === 'stale.bin'));
 test('CAM++ keeps generic and fixed-window paths distinct', camp?.files.length === 2
   && new Set(camp.files.map((file) => file.path)).size === 2

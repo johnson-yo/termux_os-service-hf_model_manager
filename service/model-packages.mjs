@@ -88,10 +88,17 @@ const sameCoordinate = (file, manifest) => {
   const manifestRemote = manifest.remote_path ?? null;
   const revisionMatch = !file.revision || !manifest.revision || file.revision === manifest.revision;
   const hashMatch = !file.sha256 || !manifest.sha256 || file.sha256 === manifest.sha256;
+  // A Package manifest can be installed from a catalog revision that has
+  // since been republished under a new immutable source revision while the
+  // approved bytes remain identical. Keep the Registry file ledger
+  // authoritative, but permit that drift only with the full remote coordinate
+  // plus both size and SHA-256—not a basename or a guessed provider match.
+  const sameBytes = file.sha256 && manifest.sha256 && file.sha256 === manifest.sha256
+    && file.size !== null && manifest.size !== null && file.size === manifest.size;
   const remoteMatch = fileRemote && manifestRemote
     ? fileRemote === manifestRemote
     : (file.path ?? file.name) === manifest.path;
-  return revisionMatch && hashMatch && remoteMatch;
+  return remoteMatch && hashMatch && (revisionMatch || sameBytes);
 };
 
 /** Registry is the sole file ledger; manifests only add exact provider maps. */

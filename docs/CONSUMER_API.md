@@ -94,6 +94,10 @@ not fabricate a byte percentage.
   approved file with a provider and exact relative path; it cannot add files.
   This permits one package to merge multiple upstream repositories while
   keeping every source/repository/revision/remote_path visible.
+- If an installed manifest carries a different source revision for the same
+  bytes, the association is accepted only when source/repository/path, size,
+  and SHA-256 all match. The Registry revision remains the displayed file
+  coordinate; a basename-only or guessed association is never accepted.
 - Delete is blocked while a current `.models` declaration names the package.
   Once allowed, the manager passes package/version/target/path expectations to
   Framework's generic purge boundary. No adjacent cache is touched.

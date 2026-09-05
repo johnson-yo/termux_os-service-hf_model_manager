@@ -56,7 +56,10 @@ Each Registry file carries `source`, `repository`, immutable `revision`,
 `remote_path`, `local_path`, size, SHA-256, and optional `role`. The Manager
 does not scan an upstream tree, guess a basename, or add a file from a local
 manifest. A manifest only maps an approved file to its Framework Asset
-provider. `total_bytes` and `downloaded_bytes` are package-card fields;
+provider. If an installed manifest has a different source revision for the
+same bytes, the map is accepted only with the same source/repository/path,
+size, and SHA-256; the Manager never falls back to a basename guess.
+`total_bytes` and `downloaded_bytes` are package-card fields;
 operation snapshots additionally expose the package/provider/asset/file,
 real `bytes_done`/`bytes_total`, byte-precision `progress`, `speed_bps`, the
 Framework `route`, `retry_count`, `resumed`, and `resume_from_bytes`. A
