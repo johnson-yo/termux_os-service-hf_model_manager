@@ -15,5 +15,10 @@ button.ghost { background: #2c313a; color: #cbd3df; } button:disabled { cursor: 
 details { border-top: 1px solid #2c313a; margin-top: 10px; padding-top: 8px; } summary { cursor: pointer; color: #9ecbff; font-weight: 600; }
 .actions { margin-top: 8px; } .badge { background: #2c313a; border-radius: 999px; color: #cbd3df; font-size: .72rem; padding: 2px 8px; }
 .badge.ok { background: #16341f; color: #7bd88f; } .badge.warn { background: #3a3016; color: #f6b26b; } .badge.bad { background: #3a1c1c; color: #f2777a; }
+.card-progress { border: 1px solid #35404c; border-radius: 7px; margin-top: 10px; padding: 7px 9px; }
+.progress-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.progress-head strong { color: #cbd3df; font-size: .78rem; } .progress-head span { color: #8b93a1; font: .72rem ui-monospace, monospace; overflow-wrap: anywhere; }
+progress { display: block; height: 6px; margin-top: 6px; width: 100%; accent-color: #4d8dff; }
+.action-reason { max-width: 260px; overflow-wrap: anywhere; }
 .file-row { border-left: 2px solid #2c313a; margin: 8px 0; padding: 5px 8px; } .import-box { border: 1px dashed #46505e; border-radius: 8px; margin: 12px 0; padding: 10px; }
 input[type=file] { color: #cbd3df; max-width: 100%; } ul { margin: 6px 0; padding-left: 20px; }

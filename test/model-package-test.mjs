@@ -129,6 +129,32 @@ test('usage is declaration metadata, not a second package card', sense?.usage.co
 test('package and upstream versions are exposed separately', sense?.package_version === '4.0.0'
   && sense.upstream_revision === senseRevision && sense.version_kind === 'package_version');
 
+const missingProviderView = buildModelPackages({
+  catalog,
+  manifests,
+  inventory: { available: true, assets: [
+    { id: 'model.sensevoice.frontend', path: senseRoot, package_id: 'sense.package', ready: true },
+    { id: 'model.sensevoice.graph', declared_by: 'sense.package', package_id: 'sense.package', ready: false, reason: 'missing_asset' },
+  ] },
+  declarations: { available: true, declarations: [] },
+});
+const missingSense = missingProviderView.packages.find((item) => item.repository.includes('sensevoice'));
+const missingGraph = missingSense?.assets.find((item) => item.id === 'model.sensevoice.graph');
+test('declared optional provider separates loaded state from missing payload', missingGraph?.provider_state === 'loaded'
+  && missingGraph.payload_state === 'missing' && missingGraph.fetchable === true && missingGraph.action === 'fetch'
+  && missingSense.actions.download === true);
+
+const absentProviderView = buildModelPackages({
+  catalog,
+  manifests,
+  inventory: { available: true, assets: [{ id: 'model.sensevoice.frontend', path: senseRoot, package_id: 'sense.package', ready: true }] },
+  declarations: { available: true, declarations: [] },
+});
+const absentSense = absentProviderView.packages.find((item) => item.repository.includes('sensevoice'));
+const absentGraph = absentSense?.assets.find((item) => item.id === 'model.sensevoice.graph');
+test('absent installable provider is visible as a provider-install action', absentGraph?.provider_state === 'absent'
+  && absentGraph.installable === true && absentGraph.action === 'install_provider' && absentSense.actions.download === true);
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`${count}/${count} assertions passed`);
 process.exit(failures ? 1 : 0);

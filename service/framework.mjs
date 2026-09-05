@@ -120,6 +120,10 @@ export class FrameworkAssets {
     return this.call(`/api/assets/${encodeURIComponent(id)}/provider`, { method: 'POST', body: {}, timeoutMs: 600_000 });
   }
 
+  packageJob(id) {
+    return this.call(`/api/admin/package-manager/jobs/${encodeURIComponent(id)}`, { timeoutMs: 20_000 });
+  }
+
   fetchPayload(id) {
     return this.call(`/api/assets/${encodeURIComponent(id)}/fetch`, { method: 'POST', body: {}, timeoutMs: 3_600_000 });
   }

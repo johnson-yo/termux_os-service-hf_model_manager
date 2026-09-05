@@ -3,7 +3,8 @@
  * [INPUT]: Framework Browser Session API and raw model-package JSON responses.
  * [OUTPUT]: The two-section 概览/模型 manager UI.
  * [POS]: hf-model-manager/web/app.js.
- * [PROTOCOL]: Show package metadata, usage, raw files, and real operations only.
+ * [PROTOCOL]: Cards are patched by stable data-key nodes; a 3-second live poll
+ *             must not replace details, scroll, file selection, or operation state.
  */
 
 const packageId = () => {
@@ -44,7 +45,8 @@ const renderOverview = (overview, summary) => {
   ].map(([key, value]) => `<dt>${esc(key)}</dt><dd class="path">${esc(value)}</dd>`).join('');
   const refresh = overview?.refresh ?? {};
   const age = Number.isFinite(Number(refresh.age_ms)) ? `${Math.round(Number(refresh.age_ms) / 1000)} 秒前` : '尚未完成';
-  $('refresh-status').textContent = `最近刷新：${age}${refresh.refreshing ? ' · 正在刷新' : ''}${refresh.last_error ? ` · ${refresh.last_error}` : ''}`;
+  const updated = refresh.updated_at_ms ? new Date(Number(refresh.updated_at_ms)).toLocaleTimeString() : '—';
+  $('refresh-status').textContent = `数据更新时间：${updated}（${age}）${refresh.refreshing ? ' · 正在刷新' : ''}${refresh.last_error ? ` · ${refresh.last_error}` : ''}`;
 };
 
 const fileRow = (file) => {
@@ -57,14 +59,26 @@ const fileRow = (file) => {
   </div>`;
 };
 
+const operationPercent = (operation) => {
+  if (operation?.progress_precision !== 'bytes') return null;
+  const value = Number(operation.percent ?? operation.progress);
+  return Number.isFinite(value) ? Math.round(value) : null;
+};
+
 const operationText = (operation) => {
-  const progress = Number.isFinite(Number(operation.progress)) ? ` · ${Math.round(Number(operation.progress))}%` : '';
+  const percent = operationPercent(operation);
+  const progress = percent === null ? '' : ` · ${percent}%`;
   const bytesText = Number.isFinite(Number(operation.bytes_total)) && Number(operation.bytes_total) > 0
     ? ` · ${bytes(operation.bytes_done)} / ${bytes(operation.bytes_total)}` : '';
   const speed = Number.isFinite(Number(operation.speed_bps)) && Number(operation.speed_bps) > 0
     ? ` · ${bytes(operation.speed_bps)}/s` : '';
-  return `${stageLabel[operation.stage] ?? operation.stage ?? operation.state}${progress}${bytesText}${speed}`;
+  const retry = Number(operation.retry_count) > 0 ? ` · 重试 ${operation.retry_count}` : '';
+  const resume = operation.resumed ? ' · 已续传' : '';
+  return `${stageLabel[operation.stage] ?? operation.stage ?? operation.state}${progress}${bytesText}${speed}${retry}${resume}`;
 };
+
+const operationFor = (data, key) => (data?.operations?.operations ?? [])
+  .find((item) => (item.package_key ?? item.asset_id) === key && item.state !== 'complete') ?? null;
 
 const renderOperations = (data) => {
   const active = (data?.operations?.operations ?? []).filter((item) => item.state !== 'complete' && item.state !== 'failed');
@@ -72,63 +86,148 @@ const renderOperations = (data) => {
   if (!active.length) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
   box.innerHTML = `<div class="operation-list">${active.map((item) => `<div class="operation item">
-    <div class="row between"><strong>${esc(item.action)}</strong><span class="badge warn">${esc(item.state)}</span></div>
-    <p class="note tiny">${esc(operationText(item))}${item.current_file ? ` · ${esc(item.current_file)}` : ''}</p>
+    <div class="row between"><strong>${esc(item.action)} · ${esc(item.package_key ?? item.asset_id)}</strong><span class="badge warn">${esc(item.state)}</span></div>
+    <p class="note tiny">${esc(operationText(item))}${item.current_provider ? ` · provider ${esc(item.current_provider)}` : ''}${item.current_file ? ` · ${esc(item.current_file)}` : ''}${item.route ? ` · ${esc(item.route)}` : ''}</p>
   </div>`).join('')}</div>`;
+};
+
+const actionSignature = (item) => JSON.stringify({
+  status: item.status,
+  actions: item.actions,
+  active: item.active_operation ?? null,
+});
+
+const actionsMarkup = (item) => {
+  const actions = item.actions ?? {};
+  const result = [];
+  if (actions.verify) result.push(`<button data-action="verify" data-key="${esc(item.key)}">验证</button>`);
+  if (actions.download && item.status === 'error') result.push(`<button data-action="download" data-key="${esc(item.key)}">重试</button>`);
+  else if (actions.download) result.push(`<button data-action="download" data-key="${esc(item.key)}">${actions.continue ? '继续下载' : '下载'}</button>`);
+  else if (!actions.verify && actions.download_reason) {
+    result.push(`<button disabled title="${esc(actions.download_reason)}">下载</button><span class="note tiny action-reason">${esc(actions.download_reason)}</span>`);
+  }
+  if (actions.delete) result.push(`<button class="ghost" data-action="delete" data-key="${esc(item.key)}">删除</button>`);
+  return result.join('') || '<span class="note tiny">暂无可执行操作</span>';
+};
+
+const createCardNode = (item) => {
+  const article = document.createElement('article');
+  article.className = 'package-card';
+  article.dataset.key = item.key;
+  article.innerHTML = `<div class="row between"><h3 data-field="title"></h3><span class="badge" data-field="badge"></span></div>
+    <p class="note tiny" data-field="source"></p>
+    <dl class="facts package-facts">
+      <dt>包版本</dt><dd data-field="package-version"></dd>
+      <dt>状态</dt><dd data-field="status"></dd>
+      <dt>总大小</dt><dd data-field="total-bytes"></dd>
+      <dt>已下载</dt><dd data-field="downloaded-bytes"></dd>
+    </dl>
+    <div class="row actions" data-role="actions"></div>
+    <div class="card-progress" data-role="progress" hidden></div>
+    <details data-detail="basic"><summary>基本信息</summary><dl class="facts" data-role="basic-body"></dl></details>
+    <details data-detail="usage"><summary>占用情况 <span class="note tiny" data-field="usage-count"></span></summary><div data-role="usage-body"></div></details>
+    <details data-detail="files"><summary>文件 <span class="note tiny" data-field="files-count"></span></summary><div data-role="files-body"></div></details>`;
+  return article;
+};
+
+const patchProgress = (node, operation) => {
+  const box = node.querySelector('[data-role="progress"]');
+  if (!operation || operation.state === 'complete') { box.hidden = true; return; }
+  if (!box.querySelector('[data-role="progress-text"]')) {
+    box.innerHTML = '<div class="progress-head"><strong data-role="progress-text"></strong><span data-role="progress-meta"></span></div><progress data-role="progress-bar" max="100"></progress>';
+  }
+  const percent = operationPercent(operation);
+  const bar = box.querySelector('[data-role="progress-bar"]');
+  box.hidden = false;
+  box.querySelector('[data-role="progress-text"]').textContent = operationText(operation);
+  box.querySelector('[data-role="progress-meta"]').textContent = [
+    operation.current_provider ? `provider: ${operation.current_provider}` : '',
+    operation.current_file || '',
+    operation.route || '',
+  ].filter(Boolean).join(' · ');
+  bar.hidden = percent === null;
+  if (percent !== null) bar.value = percent;
+};
+
+const patchCardNode = (node, item, data) => {
+  const badge = stateLabel[item.status] ?? item.status ?? '未知';
+  const totalBytes = item.total_bytes ?? item.registry?.raw_bytes;
+  const downloadedBytes = item.downloaded_bytes ?? 0;
+  const usage = item.usage?.consumers ?? [];
+  node.dataset.key = item.key;
+  node.querySelector('[data-field="title"]').textContent = item.display_name || item.repository || item.key;
+  const badgeNode = node.querySelector('[data-field="badge"]');
+  badgeNode.textContent = badge;
+  badgeNode.className = `badge ${stateClass[item.status] ?? ''}`;
+  node.querySelector('[data-field="source"]').textContent = `${item.source ?? '—'} · ${item.repository ?? '—'}`;
+  node.querySelector('[data-field="package-version"]').textContent = item.package_version ?? '—';
+  node.querySelector('[data-field="status"]').textContent = badge;
+  node.querySelector('[data-field="total-bytes"]').textContent = bytes(totalBytes);
+  node.querySelector('[data-field="downloaded-bytes"]').textContent = bytes(downloadedBytes);
+  const actions = node.querySelector('[data-role="actions"]');
+  const signature = actionSignature({ ...item, active_operation: operationFor(data, item.key)?.state ?? null });
+  if (actions.dataset.signature !== signature) {
+    actions.innerHTML = actionsMarkup(item);
+    actions.dataset.signature = signature;
+  }
+  node.querySelector('[data-role="basic-body"]').innerHTML = `<dt>来源</dt><dd>${esc(item.source)}</dd><dt>仓库</dt><dd>${esc(item.repository)}</dd>
+    <dt>Registry package_id</dt><dd class="path">${esc(item.package_id ?? '—')}</dd><dt>包版本</dt><dd>${esc(item.package_version ?? '—')}</dd>
+    <dt>上游 revision</dt><dd class="path">${esc(item.upstream_revision ?? '—')}</dd>`;
+  node.querySelector('[data-field="usage-count"]').textContent = `(${usage.length})`;
+  node.querySelector('[data-role="usage-body"]').innerHTML = usage.length
+    ? `<ul>${usage.map((entry) => `<li class="path">${esc(entry.package_id)} · ${esc(entry.path)}</li>`).join('')}</ul>`
+    : '<p class="note tiny">没有当前声明的使用者。</p>';
+  node.querySelector('[data-field="files-count"]').textContent = `(${item.files?.length ?? 0} · ${bytes(item.registry?.raw_bytes)})`;
+  node.querySelector('[data-role="files-body"]').innerHTML = (item.files ?? []).map(fileRow).join('') || '<p class="note tiny">没有已批准的原始文件。</p>';
+  patchProgress(node, operationFor(data, item.key));
 };
 
 const renderPackages = (data) => {
   const box = $('package-list');
   const packages = data?.packages ?? [];
-  if (!packages.length) { box.innerHTML = '<p class="note">没有可显示的模型包。</p>'; return; }
-  box.innerHTML = packages.map((item) => {
-    const badge = stateLabel[item.status] ?? item.status ?? '未知';
-    const assets = item.assets ?? [];
-    const canDownload = item.actions?.download && item.status !== 'complete';
-    const canDelete = item.actions?.delete;
-    const usage = item.usage?.consumers ?? [];
-    const totalBytes = item.total_bytes ?? item.registry?.raw_bytes;
-    const downloadedBytes = item.downloaded_bytes ?? 0;
-    return `<article class="package-card" data-key="${esc(item.key)}">
-      <div class="row between"><h3>${esc(item.display_name || item.repository)}</h3><span class="badge ${stateClass[item.status] ?? ''}">${esc(badge)}</span></div>
-      <p class="note tiny">${esc(item.source)} · ${esc(item.repository)}</p>
-      <dl class="facts package-facts">
-        <dt>包版本</dt><dd>${esc(item.package_version ?? '—')}</dd>
-        <dt>状态</dt><dd>${esc(badge)}</dd>
-        <dt>总大小</dt><dd>${bytes(totalBytes)}</dd>
-        <dt>已下载</dt><dd>${bytes(downloadedBytes)}</dd>
-      </dl>
-      <div class="row actions">
-        ${canDownload ? `<button data-action="download" data-key="${esc(item.key)}">${item.status === 'partial' ? '继续下载' : '下载'}</button>` : ''}
-        ${item.status === 'error' ? `<button data-action="download" data-key="${esc(item.key)}">重试</button>` : ''}
-        ${canDelete ? `<button class="ghost" data-action="delete" data-key="${esc(item.key)}">删除</button>` : ''}
-      </div>
-      <details><summary>基本信息</summary><dl class="facts">
-        <dt>来源</dt><dd>${esc(item.source)}</dd><dt>仓库</dt><dd>${esc(item.repository)}</dd>
-        <dt>Registry package_id</dt><dd class="path">${esc(item.package_id ?? '—')}</dd>
-        <dt>包版本</dt><dd>${esc(item.package_version ?? '—')}</dd><dt>上游 revision</dt><dd class="path">${esc(item.upstream_revision ?? '—')}</dd>
-      </dl></details>
-      <details><summary>占用情况 <span class="note tiny">(${usage.length})</span></summary>
-        ${usage.length ? `<ul>${usage.map((entry) => `<li class="path">${esc(entry.package_id)} · ${esc(entry.path)}</li>`).join('')}</ul>` : '<p class="note tiny">没有当前声明的使用者。</p>'}
-      </details>
-      <details><summary>文件 <span class="note tiny">(${item.files?.length ?? 0} · ${bytes(item.registry?.raw_bytes)})</span></summary>
-        ${(item.files ?? []).map(fileRow).join('') || '<p class="note tiny">没有已批准的原始文件。</p>'}
-      </details>
-    </article>`;
-  }).join('');
+  if (!packages.length) {
+    for (const child of [...box.children]) child.remove();
+    const empty = document.createElement('p');
+    empty.className = 'note';
+    empty.textContent = '没有可显示的模型包。';
+    box.append(empty);
+    return;
+  }
+  const existing = new Map([...box.children]
+    .filter((child) => child.matches?.('article.package-card[data-key]'))
+    .map((child) => [child.dataset.key, child]));
+  const ordered = [];
+  for (const item of packages) {
+    const node = existing.get(item.key) ?? createCardNode(item);
+    patchCardNode(node, item, data);
+    ordered.push(node);
+    existing.delete(item.key);
+  }
+  for (const stale of existing.values()) stale.remove();
+  for (const child of [...box.children]) if (!child.matches?.('article.package-card[data-key]')) child.remove();
+  // appendChild moves the existing article instead of replacing it, so open
+  // <details>, focus, scroll position, and any operation-local DOM state live.
+  for (const node of ordered) box.appendChild(node);
 };
 
-const refresh = async () => {
-  try {
-    const response = await api('/live');
-    const data = await response.json();
-    if (!data.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-    renderOverview(data.overview, data.summary);
-    renderPackages(data);
-    renderOperations(data);
-  } catch (error) {
-    $('summary').textContent = `读取失败：${String(error?.message ?? error)}`;
-  }
+let refreshInFlight = null;
+const refresh = () => {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const response = await api('/live');
+      const data = await response.json();
+      if (!data.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      renderOverview(data.overview, data.summary);
+      renderPackages(data);
+      renderOperations(data);
+    } catch (error) {
+      $('summary').textContent = `读取失败：${String(error?.message ?? error)}`;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 };
 
 document.addEventListener('click', async (event) => {

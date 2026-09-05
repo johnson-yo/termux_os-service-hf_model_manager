@@ -57,7 +57,10 @@ Each Registry file carries `source`, `repository`, immutable `revision`,
 does not scan an upstream tree, guess a basename, or add a file from a local
 manifest. A manifest only maps an approved file to its Framework Asset
 provider. `total_bytes` and `downloaded_bytes` are package-card fields;
-operation snapshots additionally expose real `speed_bps` and `current_file`.
+operation snapshots additionally expose the package/provider/asset/file,
+real `bytes_done`/`bytes_total`, byte-precision `progress`, `speed_bps`, the
+Framework `route`, `retry_count`, `resumed`, and `resume_from_bytes`. A
+stage-only operation never fabricates a byte percentage.
 
 The WebUI has exactly two top-level sections: `概览` and `模型`. Cards expose
 `基本信息`, `占用情况`, and `文件`, with `下载`, `继续下载`, `重试`, and `删除`

@@ -166,29 +166,82 @@ const localFileState = (file, providers) => {
   return partPath ? { state: 'partial', part_path: partPath.path, bytes: partPath.bytes } : { state: 'none', bytes: 0 };
 };
 
-const providersFor = (records, byId) => {
-  const ids = new Set(records.flatMap((record) => record.asset_ids));
-  return [...ids].map((id) => {
+const providersFor = (records, byId, catalogProvides = []) => {
+  const entries = new Map();
+  for (const record of records) {
+    for (const id of record.asset_ids) {
+      if (!entries.has(id)) entries.set(id, { id, firstRecord: record });
+    }
+  }
+  // A Registry package can advertise its provider before that provider package
+  // is loaded on the device. Keep the identity visible so the Manager can
+  // explain/execute the provider-install path instead of hiding the action.
+  for (const provided of catalogProvides ?? []) {
+    if (provided?.id && !entries.has(provided.id)) entries.set(provided.id, { id: provided.id, provided });
+  }
+  return [...entries.values()].map(({ id, firstRecord, provided }) => {
     const local = byId.get(id);
     const mappings = records
       .filter((record) => record.asset_ids.includes(id))
       .flatMap((record) => record.manifest_files
         .filter((item) => item.asset_id === id)
         .map((item) => ({ file_key: coordinateKey(record), path: item.path, optional: item.optional })));
-    const firstRecord = records.find((record) => record.asset_ids.includes(id));
+    const packageId = local?.package_id ?? local?.package ?? firstRecord?.asset_package_ids?.[0]
+      ?? provided?.package_id ?? null;
+    const loaded = Boolean(local?.declared_by || local?.path || local?.ready === true
+      || local?.ready === false && local?.reason);
+    const declared = Boolean(firstRecord || local?.declared_by);
     return {
       id,
-      package_id: local?.package_id ?? local?.package ?? firstRecord?.asset_package_ids?.[0] ?? null,
+      package_id: packageId,
       version: local?.version ?? null,
       target: local?.target ?? firstRecord?.targets?.[0] ?? 'generic',
       path: local?.path ?? null,
-      ready: local?.ready ?? null,
+      ready: local?.ready === true,
       reason: local?.reason ?? null,
+      declared,
+      loaded,
+      provider_state: loaded ? 'loaded' : 'absent',
       installed: Boolean(local?.path),
+      optional: mappings.length ? (mappings.every((item) => item.optional) ? true : false) : null,
+      installable: !loaded && Boolean(packageId),
       files: mappings,
     };
   });
 };
+
+const payloadState = (files) => {
+  const states = files.map((file) => file.local.state);
+  if (!states.length) return 'missing';
+  if (states.every((state) => state === 'complete')) return 'ready';
+  if (states.some((state) => state === 'error')) return 'error';
+  if (states.some((state) => state === 'complete' || state === 'partial')) return 'partial';
+  return 'missing';
+};
+
+const enrichProviders = (providers, files) => providers.map((provider) => {
+  const owned = files.filter((file) => file.asset_ids.includes(provider.id));
+  const state = payloadState(owned);
+  const ready = provider.ready || (provider.loaded && state === 'ready');
+  const hasSource = owned.length > 0;
+  const fetchable = provider.loaded && provider.optional === true && !ready && hasSource;
+  let fetchBlockedReason = null;
+  if (ready) fetchBlockedReason = null;
+  else if (fetchable) fetchBlockedReason = null;
+  else if (!provider.loaded) fetchBlockedReason = provider.installable ? 'provider_not_loaded' : 'provider_unavailable';
+  else if (!hasSource) fetchBlockedReason = 'provider_source_missing';
+  else if (provider.optional !== true) fetchBlockedReason = 'required_asset_install';
+  else fetchBlockedReason = provider.reason ?? 'asset_not_fetchable';
+  return {
+    ...provider,
+    provider_state: provider.loaded ? 'loaded' : 'absent',
+    ready,
+    payload_state: state,
+    fetchable,
+    fetch_blocked_reason: fetchBlockedReason,
+    action: ready ? 'verify' : fetchable ? 'fetch' : provider.installable ? 'install_provider' : 'blocked',
+  };
+});
 
 const declarationsFor = (project, declarations) => (declarations?.declarations ?? [])
   .filter((item) => item.source === project.source && item.identity === project.repository)
@@ -196,8 +249,9 @@ const declarationsFor = (project, declarations) => (declarations?.declarations ?
 
 const buildCard = (project, { manifestRecords, byId, declarations, registryAvailable, frameworkAvailable = true }) => {
   const records = mergeFiles(project, manifestRecords);
-  const providers = providersFor(records, byId);
+  const providers = providersFor(records, byId, project.provides);
   const files = records.map((file) => ({ ...file, local: localFileState(file, providers) }));
+  const resolvedProviders = enrichProviders(providers, files);
   const states = files.map((file) => file.local.state);
   const status = !registryAvailable || !frameworkAvailable ? 'unknown'
     : files.some((file) => file.local.state === 'error') ? 'error'
@@ -205,6 +259,8 @@ const buildCard = (project, { manifestRecords, byId, declarations, registryAvail
         : states.some((state) => state === 'complete' || state === 'partial') ? 'partial' : 'none';
   const mismatch = files.find((file) => file.local.mismatch)?.local.mismatch ?? null;
   const usage = declarationsFor(project, declarations);
+  const actionable = resolvedProviders.some((provider) => provider.ready || provider.fetchable || provider.installable);
+  const blockedReason = resolvedProviders.find((provider) => provider.fetch_blocked_reason)?.fetch_blocked_reason ?? 'provider_unavailable';
   return {
     key: packageKey(project),
     source: project.source,
@@ -229,13 +285,15 @@ const buildCard = (project, { manifestRecords, byId, declarations, registryAvail
     files,
     total_bytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
     downloaded_bytes: files.reduce((sum, file) => sum + (file.local.bytes ?? 0), 0),
-    assets: providers,
+    assets: resolvedProviders,
     usage: { consumers: usage, count: usage.length },
     actions: {
-      download: providers.length > 0,
-      continue: providers.length > 0,
-      retry: providers.length > 0,
-      delete: providers.some((provider) => provider.installed),
+      download: status !== 'complete' && actionable,
+      continue: status === 'partial' && actionable,
+      retry: status === 'error' && actionable,
+      verify: status === 'complete' || resolvedProviders.some((provider) => provider.ready),
+      delete: resolvedProviders.some((provider) => provider.installed),
+      download_reason: actionable ? null : blockedReason,
       import: true,
     },
   };

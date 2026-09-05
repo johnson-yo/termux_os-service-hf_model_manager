@@ -21,6 +21,7 @@ await adapter.inventory();
 await adapter.modelDeclarations();
 await adapter.fetchPayload('asset.raw');
 await adapter.purgePayload('asset.raw', { package_id: 'pkg', version: '1.0.0', target: 'generic', path: '/store/pkg/1.0.0/generic/raw' });
+await adapter.packageJob('job-1');
 test('inventory uses Core Asset endpoint', calls[0].url === 'http://core/api/assets');
 test('declarations use a read-only Core seam', calls[1].url.endsWith('/api/packages/model-declarations') && calls[1].options.method === 'GET');
 test('download delegates direct-first/fallback policy to Core', calls[2].url.endsWith('/api/assets/asset.raw/fetch') && calls[2].options.method === 'POST');
@@ -28,16 +29,23 @@ test('delete carries package/version/target/path expectations', (() => {
   const body = JSON.parse(calls[3].options.body);
   return calls[3].options.method === 'DELETE' && body.expected.version === '1.0.0' && body.expected.path.includes('/raw');
 })());
+test('package install job status uses Framework admin read route', calls.at(-1).url.endsWith('/api/admin/package-manager/jobs/job-1')
+  && calls.at(-1).options.method === 'GET');
 
 const ops = new Operations({ now: (() => { let t = 1000; return () => ++t; })() });
 const started = ops.start('download', 'huggingface:owner/repo', async ({ setStage, setProgress }) => {
-  setStage('downloading'); setProgress({ bytesDone: 2, bytesTotal: 4, currentFile: 'model.bin' }); return { ok: true };
+  setStage('downloading'); setProgress({ assetId: 'asset.raw', providerId: 'asset.raw', bytesDone: 2, bytesTotal: 4,
+    currentFile: 'model.bin', route: 'direct', speedBps: 8, resumed: true, resumeFromBytes: 2 }); return { ok: true };
 }, { stages: STAGES, progressPrecision: 'bytes' });
 const duplicate = ops.start('download', 'huggingface:owner/repo', async () => ({ ok: true }), { stages: STAGES });
 test('duplicate download returns one in-flight operation', duplicate.deduplicated === true && duplicate.operation.operation_id === started.operation.operation_id);
 await new Promise((resolve) => setTimeout(resolve, 10));
 test('operation reaches complete with real byte completion', ops.get(started.operation.operation_id).state === COMPLETE
-  && ops.get(started.operation.operation_id).bytes_done === 4 && ops.get(started.operation.operation_id).progress === 100);
+  && ops.get(started.operation.operation_id).bytes_done === 4 && ops.get(started.operation.operation_id).progress === 100
+  && ops.get(started.operation.operation_id).current_provider === 'asset.raw'
+  && ops.get(started.operation.operation_id).route === 'direct'
+  && ops.get(started.operation.operation_id).resumed === true
+  && ops.get(started.operation.operation_id).resume_from_bytes === 2);
 test('stages contain only raw Asset lifecycle phases', STAGES.join(',') === 'resolving,downloading,verifying,importing,deleting,done');
 
 console.log(`${count}/${count} assertions passed`);

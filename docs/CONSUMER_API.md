@@ -55,20 +55,41 @@ format. Its endpoint is discovered from the capability descriptor and accepts
 }
 ```
 
+Each `assets[]` entry also exposes the provider/payload state used to choose an
+action: `provider_state` is `absent|loaded`, `declared` distinguishes a
+Framework provider from catalog metadata, `payload_state` is
+`missing|partial|ready|error`, and `action` is
+`install_provider|fetch|verify|blocked`. The card's `actions` are derived from
+those states: a ready package has no download action, a declared optional
+provider with a missing payload uses Framework `/fetch`, and a blocked action
+is disabled with `download_reason`.
+
 `source` and `repository` are Registry fields, both at card and file level. The
 manager never derives them from `package_id`. `package_version` and
 `upstream_revision` are independent namespaces. Registry unavailability is
 `unknown`, not `none`; a partial file
 or `.part` prefix is not complete; a size/hash failure is `error`.
+Operation snapshots expose `package_key`, `current_asset`,
+`current_provider`, `current_file`, real `bytes_done`/`bytes_total`,
+byte-precision `progress`, `speed_bps`, the Framework `route`,
+`retry_count`, `resumed`, and `resume_from_bytes`. A stage-only operation does
+not fabricate a byte percentage.
 
 ## Lifecycle rules
 
 - Download, resume, retry, progress, direct-first routing, Registry fallback,
   hash, size, fsync, atomic rename, and free-space preflight are Framework
   responsibilities.
-- The manager asks Framework to install a provider when the catalog supplies
-  one, then asks Framework for raw payload transfer. It never constructs a
-  download URL or writes `/sdcard/termux-os/models` itself.
+- The manager asks Framework to install a provider only when the provider is
+  absent and installable. A `202` provider response is a Package job, not a
+  ready provider: the manager waits for the generic job status, rereads
+  inventory, and only then decides whether an optional payload can use
+  Framework `/fetch`. A `409 already_declared` is re-read as a race, not
+  treated as permission to fetch blindly.
+- A loaded optional provider with a missing/partial payload goes directly to
+  Framework `/fetch`; required payloads are verified/reused or reported as
+  requiring Package installation. The manager never constructs a download URL
+  or writes `/sdcard/termux-os/models` itself.
 - The Registry file list is authoritative. A manifest can only associate an
   approved file with a provider and exact relative path; it cannot add files.
   This permits one package to merge multiple upstream repositories while

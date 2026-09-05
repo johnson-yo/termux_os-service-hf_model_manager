@@ -17,6 +17,7 @@ import { FrameworkAssets } from './framework.mjs';
 import { buildModelPackages, findModelPackage } from './model-packages.mjs';
 import { Operations, STAGES } from './operations.mjs';
 import { EventLog } from './events.mjs';
+import { createDownloadPackage, responseFailure as responseError } from './download.mjs';
 
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_RETRY_MS = 2_000;
@@ -125,6 +126,16 @@ const modelView = (value) => buildModelPackages({
   declarations: value?.declarations,
 });
 
+const refreshCard = async (key, { force = true } = {}) => {
+  const value = await snapshots.refresh({ force });
+  return findModelPackage(modelView(value), key);
+};
+
+// The operation is deliberately built from the Framework adapter.  The HTTP
+// server below only chooses the package; Core owns provider jobs, bytes,
+// resume, hashes, and the final payload path.
+const downloadPackage = createDownloadPackage({ local, refreshCard });
+
 const existingPath = (p) => {
   let current = path.resolve(p);
   for (;;) {
@@ -199,83 +210,6 @@ const readJson = (req) => new Promise((resolve) => {
 const authorized = (req) => !SYSTEM_KEY || req.headers.authorization === `Bearer ${SYSTEM_KEY}`;
 
 const requireCard = (view, id) => findModelPackage(view, id);
-
-const responseError = (result, fallback) => {
-  if (result?.ok) return null;
-  return new Error(result?.data?.detail || result?.data?.error || result?.error || fallback);
-};
-
-const progressWatcher = (assetId, setProgress) => {
-  let stopped = false;
-  let previous = null;
-  const poll = async () => {
-    if (stopped) return;
-    try {
-      const response = await local.fetchProgress(assetId);
-      const progress = response.data?.progress;
-      if (progress) {
-        const bytesDone = Number(progress.bytes_done);
-        const observedAt = Date.now();
-        const speedBps = previous && observedAt > previous.at && bytesDone >= previous.bytes
-          ? ((bytesDone - previous.bytes) * 1000) / (observedAt - previous.at) : null;
-        previous = { bytes: bytesDone, at: observedAt };
-        setProgress({
-          bytesDone, bytesTotal: Number(progress.bytes_total),
-          progress: Number(progress.progress), precision: 'bytes', currentFile: progress.current_file,
-          speedBps,
-        });
-      }
-    } catch { /* the fetch result remains authoritative */ }
-  };
-  const timer = setInterval(() => { void poll(); }, 750);
-  timer.unref?.();
-  void poll();
-  return () => { stopped = true; clearInterval(timer); };
-};
-
-const downloadPackage = async (card, setStage, setProgress) => {
-  const candidates = card.assets ?? [];
-  if (!candidates.length) throw new Error('raw package has no declared Asset provider');
-  const results = [];
-  for (const candidate of candidates) {
-    let provider = candidate;
-    if (!candidate.installed) {
-      setStage('resolving');
-      const installed = await local.installProvider(candidate.id);
-      const failure = responseError(installed, `provider install failed for ${candidate.id}`);
-      if (failure) throw failure;
-      results.push({ id: candidate.id, provider: installed.data });
-      provider = installed.data?.asset ?? installed.data ?? candidate;
-    }
-    // Required assets are fetched and verified by Framework during Package
-    // installation. Calling fetchPayload again on such a ready provider is
-    // rejected by Core (`installed with its package, not fetched on demand`).
-    // Keep the Manager operation idempotent: verify the ready bytes and move
-    // on, while optional providers that are installed but not ready still use
-    // the on-demand fetch path below.
-    if (provider.ready === true || provider.asset?.ready === true) {
-      setStage('verifying');
-      const verified = await local.describe(candidate.id, { verify: true });
-      if (!verified.asset?.ready) throw new Error(`raw verification failed for ${candidate.id}: ${verified.asset?.reason ?? 'unknown'}`);
-      results.push({ id: candidate.id, reused: true, verified: true });
-      continue;
-    }
-    setStage('downloading');
-    const stopWatching = progressWatcher(candidate.id, setProgress);
-    try {
-      const fetched = await local.fetchPayload(candidate.id);
-      const failure = responseError(fetched, `raw download failed for ${candidate.id}`);
-      if (failure) throw failure;
-      results.push({ id: candidate.id, download: fetched.data });
-    } finally { stopWatching(); }
-    setStage('verifying');
-    const verified = await local.describe(candidate.id, { verify: true });
-    if (!verified.asset?.ready) throw new Error(`raw verification failed for ${candidate.id}: ${verified.asset?.reason ?? 'unknown'}`);
-    results.push({ id: candidate.id, verified: true });
-  }
-  await snapshots.refresh({ force: true });
-  return { package_key: card.key, assets: results, routes: results.flatMap((item) => item.download?.routes ?? []) };
-};
 
 const verifyPackage = async (card) => {
   const results = [];

@@ -28,6 +28,9 @@ test('download/continue/retry/delete actions use the package key', js.includes('
 test('raw absolute file path is rendered', js.includes('local.path || local.part_path') && js.includes('class="path"'));
 test('import sends the selected archive to the Package route', js.includes("api('/package/import'") && js.includes('body: file'));
 test('UI refreshes a real operation snapshot', js.includes("api('/live')") && js.includes('data?.operations'));
+test('live card refresh uses stable data-key nodes', js.includes('data-key') && js.includes('appendChild(node)') && js.includes('patchCardNode'));
+test('card-list is not rebuilt by package-list innerHTML polling', !js.includes("box.innerHTML = packages.map") && js.includes('const existing = new Map'));
+test('updated text identifies snapshot data time', js.includes('数据更新时间：') && js.includes('updated_at_ms'));
 
 console.log(`${count}/${count} assertions passed`);
 process.exit(failures ? 1 : 0);
