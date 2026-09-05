@@ -238,12 +238,27 @@ const downloadPackage = async (card, setStage, setProgress) => {
   if (!candidates.length) throw new Error('raw package has no declared Asset provider');
   const results = [];
   for (const candidate of candidates) {
+    let provider = candidate;
     if (!candidate.installed) {
       setStage('resolving');
       const installed = await local.installProvider(candidate.id);
       const failure = responseError(installed, `provider install failed for ${candidate.id}`);
       if (failure) throw failure;
       results.push({ id: candidate.id, provider: installed.data });
+      provider = installed.data?.asset ?? installed.data ?? candidate;
+    }
+    // Required assets are fetched and verified by Framework during Package
+    // installation. Calling fetchPayload again on such a ready provider is
+    // rejected by Core (`installed with its package, not fetched on demand`).
+    // Keep the Manager operation idempotent: verify the ready bytes and move
+    // on, while optional providers that are installed but not ready still use
+    // the on-demand fetch path below.
+    if (provider.ready === true || provider.asset?.ready === true) {
+      setStage('verifying');
+      const verified = await local.describe(candidate.id, { verify: true });
+      if (!verified.asset?.ready) throw new Error(`raw verification failed for ${candidate.id}: ${verified.asset?.reason ?? 'unknown'}`);
+      results.push({ id: candidate.id, reused: true, verified: true });
+      continue;
     }
     setStage('downloading');
     const stopWatching = progressWatcher(candidate.id, setProgress);
