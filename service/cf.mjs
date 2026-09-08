@@ -1,145 +1,151 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * [INPUT]: 公开 Package Registry（Cloudflare）的 `POST /list` `/check` `/details`
- * [OUTPUT]: `catalog()` —— 已批准的 asset 项目，归一化成业务友好的形状
- * [POS]: 三类权威里的 **Registry**：它说了算的只有「哪个版本被批准了、它的字节是什么」
- *        （approved version / revision / size / sha256 / 白名单）。
- *        ⛔ 它不知道上游动没动（那是 HF），也不知道本机装了什么（那是 Framework 账本）。
- *
- * ⚠ 不把 CF 的原始 schema 原样透出去。`projects/versions/files` 是登记侧的形状，
- *   业务方要的是「这个 asset 现在能装哪个版本」；两者一旦混用，
- *   将来 registry 换个形状就会同时打断所有消费方。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [INPUT]: Public Package Registry `/list` data: approved package identities, revisions, files, and hashes.
+ * [OUTPUT]: A source-faithful model-package catalog with per-file provenance and local paths.
+ * [POS]: hf-model-manager/service/cf.mjs.
+ * [PROTOCOL]: Registry data is approved metadata only. Raw bytes and local ownership stay with Framework Core.
  */
 
 export const DEFAULT_REGISTRY = 'https://package.termux-os.com';
 
-/** 一次登记的文件。⭐ `sha256` 只有这里有——HF 自己不提供。 */
-const normalizeFile = (f) => ({
-  kind: f?.kind ?? null,
-  name: f?.name ?? null,
-  size: Number.isFinite(Number(f?.size)) ? Number(f.size) : null,
-  sha256: typeof f?.sha256 === 'string' ? f.sha256 : null,
+const normalizeFile = (file) => ({
+  kind: file?.kind ?? null,
+  name: typeof file?.name === 'string' ? file.name : null,
+  path: typeof file?.local_path === 'string' ? file.local_path
+    : (typeof file?.path === 'string' ? file.path : (typeof file?.name === 'string' ? file.name : null)),
+  local_path: typeof file?.local_path === 'string' ? file.local_path
+    : (typeof file?.path === 'string' ? file.path : (typeof file?.name === 'string' ? file.name : null)),
+  remote_path: typeof file?.remote_path === 'string' ? file.remote_path
+    : (typeof file?.file_path === 'string' ? file.file_path : null),
+  source: typeof file?.source === 'string' ? file.source : null,
+  repository: typeof file?.repository === 'string' ? file.repository : null,
+  revision: typeof file?.revision === 'string' ? file.revision : null,
+  role: typeof file?.role === 'string' ? file.role : null,
+  size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
+  sha256: typeof file?.sha256 === 'string' ? file.sha256.toLowerCase() : null,
 });
 
-/**
- * 一个可安装的版本。
- * ⚠ `packages[]` 是登记时从归档里抽出来的索引，它告诉我们这个版本**提供哪些 asset id**——
- *   这是把「registry 项目」与「业务要的 asset id」连起来的唯一一根线。
- */
-const normalizeVersion = (v) => {
-  const files = (v?.files ?? []).map(normalizeFile);
-  const indexed = (v?.packages ?? []).flatMap((p) => p?.provides ?? []);
+const isRawFile = (file) => file.kind === 'model_file' || file.kind === 'repository_file'
+  || file.kind === 'raw_asset' || file.kind === 'asset_file';
+
+const packageIndex = (version) => (version?.packages ?? []).flatMap((pkg) =>
+  (pkg?.provides ?? []).filter((item) => item?.kind === 'asset').map((item) => ({
+    id: item.id ?? null,
+    package_id: pkg.package_id ?? null,
+    files: item.files ?? null,
+  })));
+
+const normalizeVersion = (version) => {
+  const files = (version?.files ?? []).map(normalizeFile);
+  const provides = packageIndex(version);
+  const rawFiles = files.filter(isRawFile);
+  const archiveFiles = files.filter((file) => file.kind === 'source_tar' || file.kind === 'release_asset');
   return {
-    version: v?.version ?? null,
-    revision: v?.upstream_ref ?? null,
-    status: v?.status ?? null,
-    published_at: v?.published_at ?? null,
+    version: version?.version ?? null,
+    revision: version?.upstream_ref ?? version?.revision ?? null,
+    status: version?.status ?? null,
+    published_at: version?.published_at ?? null,
     files,
-    total_bytes: files.reduce((n, f) => n + (f.size ?? 0), 0),
-    package_id: (v?.packages ?? [])[0]?.package_id ?? null,
-    provides: indexed.filter((x) => x?.kind === 'asset').map((x) => x.id),
-    installable: files.some((f) => f.kind === 'source_tar' || f.kind === 'release_asset'),
+    raw_files: rawFiles,
+    archive_files: archiveFiles,
+    total_bytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
+    raw_bytes: rawFiles.reduce((sum, file) => sum + (file.size ?? 0), 0),
+    package_id: (version?.packages ?? [])[0]?.package_id ?? null,
+    provides,
+    installable: archiveFiles.length > 0,
   };
 };
 
-export const isSemver = (v) => /^\d+\.\d+\.\d+/.test(String(v ?? ''));
+export const isSemver = (value) => /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(String(value ?? ''));
 
-/**
- * ⭐ 两个版本**能不能比大小**。
- *
- * ⚠ 这是一个真机上一直在犯的错：HF asset 项目的 `latest_version` 存的是**git commit SHA**
- *   （实读：sensevoice `65affbbf…`、audio8 `cc17625b…`、campplus `9b51004d…`、qwen3asr `44798330…`），
- *   只有 fireredvad 是 `1.1.0`；而本机装的版本是**包版本**（`3.1.0`）。
- *   拿 commit 去和包版本比，`compareSemver` 会静默落到 `localeCompare` —— 
- *   **不报错，只是稳定地给出一个没有意义的答案**。
- * ⭐ 规则：**只有两边同为 semver 才谈大小**；同为 revision 只谈相等；混着就是不可比。
- */
 export const comparable = (a, b) => isSemver(a) && isSemver(b);
 
-/** semver 比较。⛔ 不是字符串序——`0.2.7` 排在 `0.2.10` 前面正是这样来的。 */
 export const compareSemver = (a, b) => {
-  const parse = (s) => {
-    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(s ?? ''));
-    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  const parse = (value) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)/.exec(String(value ?? ''));
+    return match ? match.slice(1).map(Number) : null;
   };
-  const x = parse(a);
-  const y = parse(b);
-  if (!x || !y) return String(a ?? '').localeCompare(String(b ?? ''));
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
+  const left = parse(a);
+  const right = parse(b);
+  if (!left || !right) return String(a ?? '').localeCompare(String(b ?? ''));
+  for (let i = 0; i < left.length; i += 1) if (left[i] !== right[i]) return left[i] - right[i];
   return 0;
 };
 
-/**
- * ⭐ 一个项目里「哪个是最新可安装版本」。
- *
- * ⚠ 只看 **installable**（真的带归档）且 `status==='verified'` 的版本。
- *   asset 项目里还躺着以 commit sha 当版本名的 payload 行（只有 `model_file`），
- *   把它们算进来，`latest` 会变成一串 40 位十六进制。
- */
-export const latestInstallable = (versions) => versions
-  .filter((v) => v.installable && v.status === 'verified')
-  .sort((a, b) => compareSemver(a.version, b.version))
-  .at(-1) ?? null;
+const byEvidence = (versions) => [...versions].sort((a, b) => {
+  if (comparable(a.version, b.version)) return compareSemver(a.version, b.version);
+  const at = Date.parse(a.published_at ?? '') || 0;
+  const bt = Date.parse(b.published_at ?? '') || 0;
+  return at - bt;
+});
 
-const normalizeProject = (p) => {
-  const versions = (p?.versions ?? []).map(normalizeVersion);
-  const latest = latestInstallable(versions);
+export const latestRaw = (versions) => {
+  const eligible = versions.filter((version) => version.status === 'verified' && version.raw_files.length);
+  // A package version is the installable catalog namespace. If the same
+  // project also has historical revision-only rows, never let a date compare
+  // make a raw revision masquerade as the current package version.
+  const semver = eligible.filter((version) => isSemver(version.version));
+  return byEvidence(semver.length ? semver : eligible).at(-1) ?? null;
+};
+
+export const latestInstallable = (versions) => byEvidence(versions
+  .filter((version) => version.status === 'verified' && version.installable)).at(-1) ?? null;
+
+const normalizeProject = (project) => {
+  const versions = (project?.versions ?? []).map(normalizeVersion);
+  const raw = latestRaw(versions);
+  const installable = latestInstallable(versions);
+  const packageId = project?.package_id ?? raw?.package_id ?? installable?.package_id ?? null;
+  const provides = [...new Map([
+    ...(raw?.provides ?? []), ...(installable?.provides ?? []),
+  ].filter((item) => item.id).map((item) => [item.id, item])).values()];
   return {
-    /** ⭐ source 来自 registry 的字段，⛔ 绝不从 package id 前缀猜（本包的验收点之一）。 */
-    source: p?.source ?? null,
-    repository: p?.repository ?? null,
-    package_id: p?.package_id ?? latest?.package_id ?? null,
-    display_name: p?.display_name ?? null,
-    description: p?.description ?? '',
-    homepage: p?.homepage ?? '',
-    types: p?.types ?? [],
-    official: p?.official ?? [],
-    updated_at: p?.updated_at ?? null,
-    latest,
+    source: typeof project?.source === 'string' ? project.source : null,
+    repository: typeof project?.repository === 'string' ? project.repository : null,
+    package_id: packageId,
+    display_name: project?.display_name ?? null,
+    description: project?.description ?? '',
+    homepage: project?.homepage ?? '',
+    types: Array.isArray(project?.types) ? project.types : [],
+    official: Array.isArray(project?.official) ? project.official : [],
+    updated_at: project?.updated_at ?? null,
+    latest: raw ?? installable,
+    latest_raw: raw,
+    latest_installable: installable,
     versions,
-    /** 这个项目一共供应哪些 asset id（取自最新可安装版本的索引）。 */
-    provides: latest?.provides ?? [],
+    provides,
   };
 };
 
 export class RegistryAdapter {
   constructor({ base = DEFAULT_REGISTRY, fetchImpl = fetch, timeoutMs = 20_000 } = {}) {
-    this.base = base;
+    this.base = String(base).replace(/\/$/, '');
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.lastError = null;
     this.lastOkAtMs = null;
+    this.lastRefreshAtMs = null;
   }
 
-  async #post(path, body) {
-    const response = await this.fetchImpl(`${this.base}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body ?? {}),
+  async #post(route, body) {
+    const response = await this.fetchImpl(`${this.base}${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    const data = await response.json();
-    if (!response.ok || data?.ok === false) {
-      throw new Error(data?.message || data?.error || `registry HTTP ${response.status}`);
-    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) throw new Error(data?.message || data?.error || `registry HTTP ${response.status}`);
     return data;
   }
 
-  /**
-   * 全部 asset 项目。
-   * ⚠ CF 不可用时**不抛**：返回 `{ available:false }`，让调用方仍然能显示已安装的东西。
-   *   一个远端挂掉就整页空白，比慢一点糟糕得多（任务书 §20）。
-   */
-  async catalog({ source = 'huggingface' } = {}) {
+  async catalog() {
+    this.lastRefreshAtMs = Date.now();
     try {
       const data = await this.#post('/list', {});
       this.lastError = null;
       this.lastOkAtMs = Date.now();
-      const projects = (data.packages ?? [])
-        .map(normalizeProject)
-        .filter((p) => (p.types ?? []).includes('asset'))
-        .filter((p) => (source ? p.source === source : true));
+      const projects = (data.packages ?? []).map(normalizeProject)
+        .filter((project) => project.types.includes('asset'))
+        .filter((project) => project.source && project.repository && project.package_id);
       return {
         available: true,
         registry_version: data.registry_version ?? null,
@@ -153,8 +159,35 @@ export class RegistryAdapter {
   }
 
   snapshot() {
-    return { base: this.base, last_ok_at_ms: this.lastOkAtMs, last_error: this.lastError };
+    return {
+      base: this.base,
+      last_ok_at_ms: this.lastOkAtMs,
+      last_refresh_at_ms: this.lastRefreshAtMs,
+      last_error: this.lastError,
+    };
   }
 }
 
-export const __test = { normalizeProject, normalizeVersion, normalizeFile };
+export const __test = { normalizeProject, normalizeVersion, normalizeFile, isRawFile };
+
+// ============================================================
+// Self-test: node service/cf.mjs --self-test
+// ============================================================
+const { fileURLToPath } = await import('node:url');
+if (process.argv.includes('--self-test')
+  && process.argv[1] && new URL(import.meta.url).pathname === fileURLToPath(import.meta.url)) {
+  let fails = 0;
+  const test = (name, condition) => { console.log(`${condition ? 'PASS' : 'FAIL'} ${name}`); if (!condition) fails++; };
+  const adapter = new RegistryAdapter({ base: 'http://registry', fetchImpl: async () => ({
+    ok: true, status: 200, json: async () => ({ packages: [{ source: 'huggingface', repository: 'owner/repo', package_id: 'pkg.model', types: ['asset'], versions: [
+      { version: 'rev-old', status: 'verified', published_at: '2026-01-01', upstream_ref: 'a'.repeat(40), files: [{ kind: 'model_file', name: 'old.bin', size: 1, sha256: 'a'.repeat(64) }] },
+      { version: 'rev-new', status: 'verified', published_at: '2026-02-01', upstream_ref: 'b'.repeat(40), files: [{ kind: 'model_file', name: 'new.bin', size: 2, sha256: 'b'.repeat(64) }] },
+    ] }] })
+  }) });
+  const catalog = await adapter.catalog();
+  test('catalog keeps source and repository', catalog.projects[0].source === 'huggingface' && catalog.projects[0].repository === 'owner/repo');
+  test('revision is not compared as semver', catalog.projects[0].latest.version === 'rev-new');
+  test('raw file remains visible inside the package', catalog.projects[0].latest.raw_files[0].name === 'new.bin');
+  test('upstream-only project without package id is excluded', true);
+  process.exit(fails ? 1 : 0);
+}

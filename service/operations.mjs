@@ -1,10 +1,9 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
  * [INPUT]: 一个 async 执行体 + 它自报的阶段
- * [OUTPUT]: `queued → running → verifying → complete|failed` 的可查询作业，及真实字节/阶段进度
- * [POS]: ⭐ Framework 的按需取是**同步阻塞 HTTP**（真机实测 14.7 MB 阻塞 35.4 秒，
- *        1 GB 会阻塞十几分钟）。业务 package 不能被一次下载卡住几分钟，
- *        所以这里把它包成作业：立刻回 202 + operation_id，之后轮询。
+ * [OUTPUT]: `queued → running → verifying → complete|failed` 的可查询原始资产作业。
+ * [POS]: Framework 的大文件操作是同步阻塞 HTTP；这里把它包成作业，
+ *        立即回 operation_id，之后轮询真实文件流状态。
  *
  * ⚠ **不伪造进度。** 下载的 bytes_done/bytes_total 只接受 Framework 文件流的真实值；
  *   准备动作的百分比只由真实 stage 映射，绝不按时间自增。
@@ -21,9 +20,7 @@ export const FAILED = 'failed';
 export const TERMINAL = new Set([COMPLETE, FAILED]);
 
 export const STAGES = Object.freeze([
-  'resolving', 'downloading', 'verifying',
-  'validate_input', 'release_runtime', 'load_prebuilt', 'compile', 'load_generated',
-  'inference_verify', 'restore_runtime', 'done',
+  'resolving', 'downloading', 'verifying', 'importing', 'deleting', 'done',
 ]);
 
 export class Operations {
@@ -70,7 +67,19 @@ export class Operations {
       progress_precision: progressPrecision ?? (Number.isFinite(bytesTotal) ? 'bytes' : 'stage'),
       stages,
       error: null,
+      error_code: null,
       result: null,
+      // Package/provider/file are kept separately so a UI can explain which
+      // layer is active without guessing from a route or a stage label.
+      package_key: assetId,
+      current_asset: null,
+      current_provider: null,
+      current_file: null,
+      route: null,
+      speed_bps: null,
+      retry_count: 0,
+      resumed: false,
+      resume_from_bytes: null,
     };
     this.list.unshift(op);
     while (this.list.length > this.keep) this.list.pop();
@@ -84,7 +93,12 @@ export class Operations {
       this.#touch(op);
     };
 
-    const setProgress = ({ bytesDone, bytesTotal: nextTotal, progress, precision, currentFile } = {}) => {
+    const setProgress = ({
+      assetId, providerId, currentAsset, bytesDone, bytesTotal: nextTotal, progress, precision,
+      currentFile, route, speedBps, retry, retryCount, resumed, resumeFromBytes,
+    } = {}) => {
+      if (assetId || currentAsset) op.current_asset = assetId ?? currentAsset;
+      if (providerId) op.current_provider = providerId;
       if (Number.isFinite(nextTotal) && nextTotal >= 0) op.bytes_total = nextTotal;
       if (Number.isFinite(bytesDone)) {
         op.bytes_done = op.bytes_done === null ? bytesDone : Math.max(op.bytes_done, bytesDone);
@@ -95,6 +109,12 @@ export class Operations {
       }
       if (precision) op.progress_precision = precision;
       if (currentFile) op.current_file = currentFile;
+      if (route) op.route = route;
+      if (Number.isFinite(speedBps) && speedBps >= 0) op.speed_bps = speedBps;
+      if (Number.isFinite(retryCount) && retryCount >= 0) op.retry_count = retryCount;
+      else if (Number.isFinite(retry) && retry >= 0) op.retry_count = retry;
+      if (resumed === true) op.resumed = true;
+      if (Number.isFinite(resumeFromBytes) && resumeFromBytes >= 0) op.resume_from_bytes = resumeFromBytes;
       this.#touch(op);
     };
 
@@ -116,6 +136,7 @@ export class Operations {
         op.stage = 'done';
       } catch (error) {
         op.error = String(error?.message ?? error);
+        op.error_code = error?.code ?? null;
         op.state = FAILED;
       } finally {
         op.updated_at_ms = this.now();

@@ -1,17 +1,11 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * [INPUT]: Framework Core 的 `/api/assets*`、`/api/packages`，凭 loader 注入的 System Key
- * [OUTPUT]: 已安装事实（inventory / resolve / verify）与资产生命周期动作（provider / fetch / restore / drop）
- * [POS]: 三类权威里的 **本机**。⭐ Framework 的资产账本仍然是「装了什么」的唯一真相，
- *        本包**不另造第二套已安装事实**。
- *
- * ⛔ 这里不实现 sha256、不实现 `.part`、不实现原子 rename、不实现 target 比较、不实现磁盘预检——
- *   那五样 Framework 都已经做对了，复制一份只会得到两个会各自漂移的版本。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [INPUT]: Framework Core's authenticated generic Package/Asset HTTP contract.
+ * [OUTPUT]: Raw Asset inventory, Package manifests, declarations, transfer, import, and purge operations.
+ * [POS]: hf-model-manager/service/framework.mjs.
+ * [PROTOCOL]: The manager delegates bytes, hashes, resume, atomicity, and shared-store ownership to Core.
  */
 
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 export class FrameworkAssets {
@@ -21,7 +15,7 @@ export class FrameworkAssets {
     fetchImpl = fetch,
     timeoutMs = 20_000,
   } = {}) {
-    this.base = base;
+    this.base = base.replace(/\/$/, '');
     this.key = key;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -30,12 +24,13 @@ export class FrameworkAssets {
 
   get configured() { return Boolean(this.base && this.key); }
 
-  async call(path, { method = 'GET', body, timeoutMs = this.timeoutMs } = {}) {
-    if (!this.configured) throw new Error('no Framework credentials in the environment');
-    const response = await this.fetchImpl(`${this.base}${path}`, {
+  async call(route, { method = 'GET', body, timeoutMs = this.timeoutMs, headers = {} } = {}) {
+    if (!this.configured) throw new Error('Framework connection is not configured');
+    const response = await this.fetchImpl(`${this.base}${route}`, {
       method,
       headers: {
         Authorization: `Bearer ${this.key}`,
+        ...headers,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -45,16 +40,12 @@ export class FrameworkAssets {
     return { status: response.status, ok: response.ok, data };
   }
 
-  /**
-   * 全部已登记资产。⚠ 读不到时返回 `available:false` 而不是空列表：
-   * 「没有装任何资产」与「问不到」是两个完全不同的结论，压成一个会让 UI 说谎。
-   */
   async inventory() {
     try {
-      const r = await this.call('/api/assets');
-      if (!r.ok) throw new Error(r.data?.error || `HTTP ${r.status}`);
+      const response = await this.call('/api/assets');
+      if (!response.ok) throw new Error(response.data?.error || `HTTP ${response.status}`);
       this.lastError = null;
-      const assets = r.data.assets ?? r.data.value ?? [];
+      const assets = response.data.assets ?? [];
       return { available: true, assets: Array.isArray(assets) ? assets : Object.values(assets) };
     } catch (error) {
       this.lastError = String(error?.message ?? error);
@@ -62,129 +53,147 @@ export class FrameworkAssets {
     }
   }
 
-  /**
-   * 单个资产的解析结果。⭐ target 匹配、文件存在性、（可选）逐档 sha256 全部由 Framework 做。
-   * `verify:true` 会重算校验和——几百 MB 要数十秒，故只在显式要求时用。
-   */
-  async describe(id, { verify = false } = {}) {
-    try {
-      const r = await this.call(`/api/assets/${encodeURIComponent(id)}${verify ? '?verify=1' : ''}`,
-        { timeoutMs: verify ? 180_000 : this.timeoutMs });
-      this.lastError = null;
-      return { available: true, status: r.status, asset: r.data.asset ?? r.data.value ?? r.data };
-    } catch (error) {
-      this.lastError = String(error?.message ?? error);
-      return { available: false, error: 'framework_unavailable', detail: this.lastError };
-    }
-  }
-
-  /** 装上提供这个 asset 的那个包。⭐ 调用方只说得出 asset id，由 Framework 查目录。 */
-  installProvider(id) {
-    return this.call(`/api/assets/${encodeURIComponent(id)}/provider`, { method: 'POST', body: {}, timeoutMs: 600_000 });
-  }
-
-  /** 取按需 payload。⚠ Framework 这条是**同步阻塞**的，故只许在 operation 线程里调。 */
-  fetchPayload(id) {
-    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch`, { method: 'POST', body: {}, timeoutMs: 3_600_000 });
-  }
-
-  /** 逻辑模型删除后恢复包随附资产；Framework 会要求 model.* + deactivated=1。 */
-  restorePayload(id, logicalModelId) {
-    const query = `?logical_model_id=${encodeURIComponent(logicalModelId)}&deactivated=1`;
-    return this.call(`/api/assets/${encodeURIComponent(id)}/restore${query}`, {
-      method: 'POST', body: {}, timeoutMs: 3_600_000,
-    });
-  }
-
-  /** 读取 Framework 维护的当前/最近一次真实文件流进度；没有任务时返回 progress:null。 */
-  fetchProgress(id) {
-    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch/progress`, { timeoutMs: 10_000 });
-  }
-
-  /**
-   * Ask Framework to abort only a fetch whose byte stream has gone stale.
-   * A recent worker remains authoritative; this is not a force-download path.
-   */
-  reconcileFetch(id, { staleAfterMs = 120_000 } = {}) {
-    const query = `?stale_after_ms=${encodeURIComponent(staleAfterMs)}`;
-    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch/reconcile${query}`, {
-      method: 'POST', body: {}, timeoutMs: 20_000,
-    });
-  }
-
-  /** ⛔ 普通删除只适用于按需资产；包随附资产走受限的逻辑模型删除。 */
-  dropPayload(id) {
-    return this.call(`/api/assets/${encodeURIComponent(id)}/payload`, { method: 'DELETE', timeoutMs: 120_000 });
-  }
-
-  /** 仅由 Manager 在 App 已确认 inactive 后调用；不放开通用 payload 删除守卫。 */
-  dropLogicalPayload(id, logicalModelId) {
-    const query = `?logical_model_id=${encodeURIComponent(logicalModelId)}&deactivated=1`;
-    return this.call(`/api/assets/${encodeURIComponent(id)}/payload/logical-model${query}`, {
-      method: 'DELETE', timeoutMs: 120_000,
-    });
-  }
-
-  /**
-   * Request a generic Framework service restart after a logical model changes.
-   * Manager names the consumer service only; it never knows residents, graph
-   * ids, or speech internals. Framework preserves the consumer's desired state
-   * while restarting it, so this is a refresh seam rather than a new event bus.
-   */
-  restartService(id = 'termux-speech') {
-    return this.call(`/api/stage/services/${encodeURIComponent(id)}/restart`, {
-      method: 'POST', body: {}, timeoutMs: 120_000,
-    });
-  }
-
-  /** 已装包的 manifest —— 声明式 reference 的来源。 */
   async packages() {
     try {
-      const r = await this.call('/api/packages');
-      if (!r.ok) throw new Error(r.data?.error || `HTTP ${r.status}`);
-      return { available: true, packages: r.data.packages ?? [] };
+      const response = await this.call('/api/packages');
+      if (!response.ok) throw new Error(response.data?.error || `HTTP ${response.status}`);
+      this.lastError = null;
+      return { available: true, packages: response.data.packages ?? [] };
     } catch (error) {
       this.lastError = String(error?.message ?? error);
       return { available: false, error: 'framework_unavailable', detail: this.lastError, packages: [] };
     }
   }
 
-  /**
-   * ⭐ 从**已安装根目录**直接读全部 manifest。
-   *
-   * 为什么不走 HTTP：真机实测 `/api/packages` 要 **11.8 秒**、
-   * `/api/packages/<id>` 要 **6.1 秒**，而 Framework 是单进程 Node——
-   * 十个包就是一分钟，并行也没用（请求全排在同一个事件循环后面，还会堵住别人）。
-   * 这里读的是 Framework 自己也在读的**同一份文件**，不是第二个真相源；
-   * ⚠ 读不到就回落 HTTP，绝不假装没有包。
-   */
-  manifestsFromDisk() {
-    const root = process.env.PACKAGES_INSTALLED_DIR
-      || path.join(os.homedir(), '.termux-os', 'packages');
-    let dirs;
-    try { dirs = fs.readdirSync(root, { withFileTypes: true }); }
-    catch { return null; }
-    const out = [];
-    for (const d of dirs) {
-      if (!d.isDirectory() || d.name.startsWith('.')) continue;
+  async packageManifests() {
+    const listed = await this.packages();
+    if (!listed.available) return listed;
+    const manifests = [];
+    for (const item of listed.packages) {
       try {
-        const active = JSON.parse(fs.readFileSync(path.join(root, d.name, 'active.json'), 'utf8'));
-        const manifest = JSON.parse(fs.readFileSync(
-          path.join(root, d.name, 'versions', active.active_version, 'termux-os.package.json'), 'utf8'));
-        out.push({ id: d.name, manifest });
-      } catch { /* 半装好的目录跳过；它本来也不该被算作消费方 */ }
+        const response = await this.call(`/api/packages/${encodeURIComponent(item.id)}`);
+        if (!response.ok || !response.data.package?.manifest) throw new Error(response.data?.error || `HTTP ${response.status}`);
+        manifests.push({ id: item.id, version: item.version ?? null, manifest: response.data.package.manifest });
+      } catch (error) {
+        this.lastError = String(error?.message ?? error);
+        return { available: false, error: 'framework_manifest_unavailable', detail: this.lastError, manifests: [] };
+      }
     }
-    return out;
+    return { available: true, manifests };
   }
 
-  async packageManifest(id) {
+  async modelDeclarations() {
     try {
-      const r = await this.call(`/api/packages/${encodeURIComponent(id)}`);
-      return r.ok ? (r.data.package?.manifest ?? null) : null;
-    } catch { return null; }
+      const response = await this.call('/api/packages/model-declarations');
+      if (!response.ok) throw new Error(response.data?.error || `HTTP ${response.status}`);
+      return { available: true, ...response.data };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: 'framework_unavailable', detail: this.lastError, declarations: [], packages: [] };
+    }
   }
+
+  async device() {
+    try {
+      const response = await this.call('/api/system/device');
+      if (!response.ok) throw new Error(response.data?.error || `HTTP ${response.status}`);
+      return { available: true, device: response.data.device ?? null };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: 'framework_unavailable', detail: this.lastError, device: null };
+    }
+  }
+
+  async describe(id, { verify = false } = {}) {
+    try {
+      const response = await this.call(`/api/assets/${encodeURIComponent(id)}${verify ? '?verify=1' : ''}`, {
+        timeoutMs: verify ? 180_000 : this.timeoutMs,
+      });
+      return { available: true, status: response.status, asset: response.data.asset ?? response.data };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: 'framework_unavailable', detail: this.lastError, asset: null };
+    }
+  }
+
+  installProvider(id) {
+    return this.call(`/api/assets/${encodeURIComponent(id)}/provider`, { method: 'POST', body: {}, timeoutMs: 600_000 });
+  }
+
+  packageJob(id) {
+    return this.call(`/api/admin/package-manager/jobs/${encodeURIComponent(id)}`, { timeoutMs: 20_000 });
+  }
+
+  fetchPayload(id) {
+    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch`, { method: 'POST', body: {}, timeoutMs: 3_600_000 });
+  }
+
+  fetchProgress(id) {
+    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch/progress`, { timeoutMs: 10_000 });
+  }
+
+  reconcileFetch(id, { staleAfterMs = 120_000 } = {}) {
+    return this.call(`/api/assets/${encodeURIComponent(id)}/fetch/reconcile?stale_after_ms=${encodeURIComponent(staleAfterMs)}`, {
+      method: 'POST', body: {}, timeoutMs: 20_000,
+    });
+  }
+
+  purgePayload(id, expected = {}) {
+    return this.call(`/api/assets/${encodeURIComponent(id)}/payload?purge=1`, {
+      method: 'DELETE', body: { expected }, timeoutMs: 120_000,
+    });
+  }
+
+  /** Stream an archive to Core; this manager never stages bytes in the shared store. */
+  async importArchive(readable, { contentType = 'application/gzip', contentLength = undefined } = {}) {
+    if (!this.configured) throw new Error('Framework connection is not configured');
+    const headers = {
+      Authorization: `Bearer ${this.key}`,
+      'Content-Type': contentType,
+      ...(contentLength ? { 'Content-Length': String(contentLength) } : {}),
+    };
+    const response = await this.fetchImpl(`${this.base}/api/assets/import`, {
+      method: 'POST', headers, body: readable, duplex: 'half',
+      signal: AbortSignal.timeout(3_600_000),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { status: response.status, ok: response.ok, data };
+  }
+
+  // Kept as a compatibility-shaped no-op for callers that want to opt into
+  // Core's HTTP manifest seam. It never reads or writes a private ledger.
+  manifestsFromDisk() { return null; }
 
   snapshot() {
-    return { base: this.base || null, configured: this.configured, last_error: this.lastError };
+    return { configured: this.configured, base: this.base, last_error: this.lastError };
   }
+}
+
+// ============================================================
+// Self-test: node service/framework.mjs --self-test
+// ============================================================
+const { fileURLToPath } = await import('node:url');
+if (process.argv.includes('--self-test')
+  && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  let fails = 0;
+  const test = (name, condition) => { console.log(`${condition ? 'PASS' : 'FAIL'} ${name}`); if (!condition) fails++; };
+  const calls = [];
+  const adapter = new FrameworkAssets({
+    base: 'http://framework', key: 'key',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, status: 200, json: async () => ({ assets: [], declarations: [] }) };
+    },
+  });
+  const inventory = await adapter.inventory();
+  await adapter.modelDeclarations();
+  test('inventory delegates to Core', inventory.available && calls[0].url === 'http://framework/api/assets');
+  test('declaration seam is read-only', calls.some((call) => call.url.endsWith('/api/packages/model-declarations')
+    && call.options.method === 'GET'));
+  test('purge carries explicit expectations', (() => {
+    void adapter.purgePayload('asset.raw', { package_id: 'pkg', version: '1.0.0', target: 'generic' });
+    const call = calls.at(-1);
+    return call.options.method === 'DELETE' && JSON.parse(call.options.body).expected.version === '1.0.0';
+  })());
+  process.exit(fails ? 1 : 0);
 }

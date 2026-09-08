@@ -18,8 +18,6 @@ export const EVENT_TYPES = Object.freeze([
   'operation_stage',
   'operation_completed',
   'operation_failed',
-  'reference_changed',
-  'update_status_changed',
   'source_availability_changed',
 ]);
 
