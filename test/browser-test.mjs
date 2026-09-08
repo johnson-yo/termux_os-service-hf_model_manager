@@ -153,11 +153,14 @@ try {
   process.exitCode = failures ? 1 : 0;
 } finally {
   socket?.close();
-  chrome.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => chrome.once('exit', resolve)),
-    sleep(1_000),
-  ]);
+  const chromeExited = new Promise((resolve) => {
+    chrome.once('exit', resolve);
+    if (chrome.exitCode !== null || chrome.signalCode !== null) resolve();
+  });
+  if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGTERM');
+  await Promise.race([chromeExited, sleep(5_000)]);
+  if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
+  await Promise.race([chromeExited, sleep(2_000)]);
   await new Promise((resolve) => server.close(resolve));
-  fs.rmSync(chromeProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  fs.rmSync(chromeProfile, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 }
