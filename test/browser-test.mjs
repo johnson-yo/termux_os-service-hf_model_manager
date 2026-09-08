@@ -98,7 +98,7 @@ const chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-browser-'))
 const chrome = spawn('/usr/bin/google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
   '--user-data-dir=' + chromeProfile, `--remote-debugging-port=${chromePort}`, 'about:blank',
-], { stdio: 'ignore' });
+], { stdio: 'ignore', detached: true });
 let socket;
 let nextId = 1;
 const pending = new Map();
@@ -157,9 +157,20 @@ try {
     chrome.once('exit', resolve);
     if (chrome.exitCode !== null || chrome.signalCode !== null) resolve();
   });
-  if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGTERM');
+  const killChrome = (signal) => {
+    if (chrome.pid && chrome.exitCode === null && chrome.signalCode === null) {
+      try {
+        process.kill(-chrome.pid, signal);
+        return;
+      } catch {
+        // Fall back to the direct child if the process group has already gone away.
+      }
+      try { chrome.kill(signal); } catch { /* already exited */ }
+    }
+  };
+  killChrome('SIGTERM');
   await Promise.race([chromeExited, sleep(5_000)]);
-  if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
+  killChrome('SIGKILL');
   await Promise.race([chromeExited, sleep(2_000)]);
   await new Promise((resolve) => server.close(resolve));
   fs.rmSync(chromeProfile, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
