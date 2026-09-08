@@ -1,4 +1,4 @@
-# Dependency maturity — Raw Model Package Manager 0.3.1 development candidate
+# Dependency maturity — Raw Model Package Manager 0.4.4
 
 The manager is optional by design. It improves discovery and lifecycle UX but
 is not required for a consumer to access its own declared raw Asset.
@@ -24,5 +24,5 @@ starting/querying operations. A future consumer may request an absolute raw
 file path and then apply its own business/runtime policy. This package must not
 become that policy.
 
-The development candidate is packed and device-tested locally only. It is not
-registered as a formal public package in this round.
+The 0.4.4 release is packaged and device-tested, and its public source is
+published through the GitHub tag and Cloudflare Package Registry.

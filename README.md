@@ -96,6 +96,7 @@ node test/run-all.mjs
 node scripts/verify-device.mjs
 ```
 
-This development candidate is not formally published to GitHub or the
-Cloudflare Registry in the Framework release round. It may be packed and
-installed through the local Framework development flow for device acceptance.
+The package is published through the GitHub tag and Cloudflare Package
+Registry. A local SDK archive is a separate deterministic artifact used for
+installation and verification; the Registry source archive is always resolved
+from the public GitHub tag.

@@ -1,6 +1,6 @@
 # hf-model-manager — raw-only Package L2
 
-Parent: `/mnt/2tb/termux-os/AGENTS.md` and `GEB_rule.md`.
+Parent: the workspace governance rules and the package documentation contract.
 
 This Package manages approved raw model package metadata and files. It does not
 implement consumer/runtime policy. Before changing code, read
@@ -39,8 +39,7 @@ node test/run-all.mjs
 node scripts/verify-device.mjs
 ```
 
-The Manager is a local development candidate in this round. It is not a
-formal GitHub/Cloudflare release. Framework Core changes are formal only after
-its complete `npm test`, publication check, commit/push, and Registry readback.
+The Manager is published as a formal GitHub/Cloudflare package only after the
+package tests, publication checks, GitHub tag, and Registry readback all pass.
 
 [PROTOCOL]: Update this file when the Package boundary or directory contract changes.
