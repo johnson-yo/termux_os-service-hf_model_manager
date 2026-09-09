@@ -15,10 +15,12 @@ let count = 0;
 const test = (name, condition) => { count += 1; console.log(`${condition ? 'PASS' : 'FAIL'} ${name}`); if (!condition) failures++; };
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const publicFiles = read('public-files.txt').split('\n').map((line) => line.trim()).filter(Boolean);
 const production = ['package.mjs', 'service/main.mjs', 'service/framework.mjs', 'service/cf.mjs',
   'service/model-packages.mjs', 'service/operations.mjs', 'service/transfer-sources.mjs', 'web/index.html', 'web/app.js'];
 const source = production.map(read).join('\n');
 
+test('public files include the download entrypoint dependency', publicFiles.includes('service/download.mjs'));
 test('service is below the handoff line limit', read('service/main.mjs').split('\n').length < 1453);
 for (const retired of ['service/app.mjs', 'service/modelstate.mjs', 'service/resolve-descriptor.mjs', 'service/logical.mjs', 'service/references.mjs', 'service/status.mjs']) {
   test(`${retired} is structurally removed`, !fs.existsSync(path.join(root, retired)));

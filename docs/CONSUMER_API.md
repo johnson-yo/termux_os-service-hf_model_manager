@@ -11,7 +11,7 @@ policy-free technical primitives, but Core must not actively decide whether a
 Manager may download, update, verify, or delete based on `optional`, provider
 load state, or consumer declarations. A payload operation never unregisters
 the Asset Package. The contract below is the target correction for the current
-`0.4.6` implementation; the old `Framework-only` behavior is non-conforming
+`0.4.7` implementation; the old `Framework-only` behavior is non-conforming
 and must not be extended.
 
 ## Discovery

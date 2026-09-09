@@ -10,6 +10,7 @@ public-files.txt
 scripts/verify-device.mjs
 service/cf.mjs
 service/delete.mjs
+service/download.mjs
 service/events.mjs
 service/framework.mjs
 service/main.mjs
