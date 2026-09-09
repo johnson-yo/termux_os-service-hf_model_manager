@@ -16,7 +16,7 @@ const test = (name, condition) => { count += 1; console.log(`${condition ? 'PASS
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const production = ['package.mjs', 'service/main.mjs', 'service/framework.mjs', 'service/cf.mjs',
-  'service/model-packages.mjs', 'service/operations.mjs', 'web/index.html', 'web/app.js'];
+  'service/model-packages.mjs', 'service/operations.mjs', 'service/transfer-sources.mjs', 'web/index.html', 'web/app.js'];
 const source = production.map(read).join('\n');
 
 test('service is below the handoff line limit', read('service/main.mjs').split('\n').length < 1453);

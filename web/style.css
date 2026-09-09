@@ -22,3 +22,5 @@ progress { display: block; height: 6px; margin-top: 6px; width: 100%; accent-col
 .action-reason { max-width: 260px; overflow-wrap: anywhere; }
 .file-row { border-left: 2px solid #2c313a; margin: 8px 0; padding: 5px 8px; } .import-box { border: 1px dashed #46505e; border-radius: 8px; margin: 12px 0; padding: 10px; }
 input[type=file] { color: #cbd3df; max-width: 100%; } ul { margin: 6px 0; padding-left: 20px; }
+dialog { max-width: min(680px, calc(100vw - 24px)); width: 100%; border: 1px solid #46505e; border-radius: 10px; background: #1d2026; color: #e8e8e8; padding: 16px; }
+dialog::backdrop { background: rgb(0 0 0 / 65%); } .impact { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 42vh; overflow: auto; background: #14161a; border-radius: 6px; padding: 9px; color: #cbd3df; font: .76rem/1.5 ui-monospace, monospace; }

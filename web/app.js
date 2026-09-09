@@ -101,6 +101,7 @@ const actionsMarkup = (item) => {
   const actions = item.actions ?? {};
   const result = [];
   if (actions.verify) result.push(`<button data-action="verify" data-key="${esc(item.key)}">验证</button>`);
+  if (actions.update) result.push(`<button data-action="update" data-key="${esc(item.key)}">更新</button>`);
   if (actions.download && item.status === 'error') result.push(`<button data-action="download" data-key="${esc(item.key)}">重试</button>`);
   else if (actions.download) result.push(`<button data-action="download" data-key="${esc(item.key)}">${actions.continue ? '继续下载' : '下载'}</button>`);
   else if (!actions.verify && actions.download_reason) {
@@ -108,6 +109,44 @@ const actionsMarkup = (item) => {
   }
   if (actions.delete) result.push(`<button class="ghost" data-action="delete" data-key="${esc(item.key)}">删除</button>`);
   return result.join('') || '<span class="note tiny">暂无可执行操作</span>';
+};
+
+const deleteImpactText = (plan) => (plan?.impacts ?? []).map((impact) => {
+  const files = Array.isArray(impact.files) ? impact.files : [];
+  const bytesTotal = Number(impact.bytes) || files.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
+  const selected = (impact.selected_by ?? []).map((item) => item.key ?? `${item.asset_id ?? 'asset'}:${item.variant_id ?? 'generic'}`);
+  const consumers = (impact.consumers ?? []).map((item) => typeof item === 'string' ? item : `${item.package_id ?? 'package'} ${item.path ?? ''}`.trim());
+  return [
+    `Payload: ${impact.payload_id ?? 'legacy payload'}`,
+    `大小: ${bytes(bytesTotal)} · 来源: ${impact.provenance ?? impact.layout ?? 'unknown'}`,
+    `Package: ${impact.package_id ?? '—'} · version: ${impact.version ?? '—'}`,
+    `当前 Selection: ${selected.length ? selected.join(', ') : '无'}`,
+    `声明使用者: ${consumers.length ? consumers.join(', ') : '无'}`,
+    `runtime: ${impact.runtime?.loaded ? '当前有运行时观察到 loaded' : '未观察到 loaded'}`,
+  ].join('\n');
+}).join('\n\n') || '没有可删除的 Payload。';
+
+const confirmDelete = async (plan) => {
+  const text = `删除后原始 Payload 字节将被移除，Declaration 会保留。\n\n${deleteImpactText(plan)}`;
+  const dialog = $('delete-dialog');
+  if (!dialog || typeof dialog.showModal !== 'function') return window.confirm(text);
+  $('delete-impact').textContent = deleteImpactText(plan);
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      dialog.querySelector('[data-delete-cancel]')?.removeEventListener('click', cancel);
+      dialog.querySelector('[data-delete-confirm]')?.removeEventListener('click', accept);
+      dialog.removeEventListener('cancel', cancelEvent);
+      if (dialog.open) dialog.close();
+      resolve(value);
+    };
+    const cancel = () => finish(false);
+    const accept = () => finish(true);
+    const cancelEvent = (event) => { event.preventDefault(); finish(false); };
+    dialog.querySelector('[data-delete-cancel]')?.addEventListener('click', cancel);
+    dialog.querySelector('[data-delete-confirm]')?.addEventListener('click', accept);
+    dialog.addEventListener('cancel', cancelEvent);
+    dialog.showModal();
+  });
 };
 
 const createCardNode = (item) => {
@@ -242,11 +281,19 @@ document.addEventListener('click', async (event) => {
   if (!button || button.disabled) return;
   const action = button.dataset.action;
   const key = button.dataset.key;
-  if (action === 'delete' && !window.confirm('删除这个模型包的本地原始文件？当前声明的使用者会阻止删除。')) return;
   button.disabled = true;
   try {
-    const route = action === 'delete' ? `/package/delete?id=${encodeURIComponent(key)}` : `/package/${action}?id=${encodeURIComponent(key)}`;
-    const response = await api(route, { method: action === 'delete' ? 'DELETE' : 'POST', body: '{}' });
+    let route = `/package/${action}?id=${encodeURIComponent(key)}`;
+    let options = { method: 'POST', body: '{}' };
+    if (action === 'delete') {
+      const planResponse = await api(`/package/delete-plan?id=${encodeURIComponent(key)}`, { method: 'POST', body: '{}' });
+      const planBody = await planResponse.json();
+      if (!planResponse.ok || !planBody.ok) throw new Error(planBody.error ?? `HTTP ${planResponse.status}`);
+      const plan = planBody.plan ?? planBody;
+      if (!await confirmDelete(plan)) return;
+      options = { method: 'POST', body: JSON.stringify({ confirmation_token: plan.confirmation_token }) };
+    }
+    const response = await api(route, options);
     const data = await response.json();
     if (!data.ok) alert(`操作失败：${data.error ?? response.status}`);
   } catch (error) { alert(`操作失败：${String(error?.message ?? error)}`); }

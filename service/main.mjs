@@ -18,6 +18,8 @@ import { buildModelPackages, findModelPackage } from './model-packages.mjs';
 import { Operations, STAGES } from './operations.mjs';
 import { EventLog } from './events.mjs';
 import { createDownloadPackage, responseFailure as responseError } from './download.mjs';
+import { createDeleteCoordinator } from './delete.mjs';
+import { resolveTransferFiles } from './transfer-sources.mjs';
 
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_RETRY_MS = 2_000;
@@ -31,6 +33,8 @@ const registry = new RegistryAdapter({ base: REGISTRY_URL });
 const local = new FrameworkAssets();
 const operations = new Operations();
 const events = new EventLog();
+const deleteCoordinator = createDeleteCoordinator({ local });
+const v2Unsupported = (value) => [404, 405, 501].includes(Number(value?.status));
 let changeSeq = 0;
 const bump = () => { changeSeq += 1; };
 
@@ -49,7 +53,8 @@ operations.onChange = (operation) => {
 };
 
 const ledgerFile = () => process.env.ASSET_REGISTRY_FILE
-  || path.join(os.homedir(), '.termux-os', 'assets', 'registry.v1.json');
+  || process.env.ASSET_PAYLOAD_LEDGER_PATH
+  || path.join(os.homedir(), '.termux-os', 'assets', 'payloads.v2.json');
 const ledgerFingerprint = () => {
   try { const stat = fs.statSync(ledgerFile()); return `${stat.mtimeMs}:${stat.size}`; }
   catch { return 'absent'; }
@@ -71,7 +76,10 @@ class SnapshotStore {
     this.inFlight = (async () => {
       try {
         const [catalog, inventory, declarations, manifests, device] = await Promise.all([
-          registry.catalog(), local.inventory(), local.modelDeclarations(), local.packageManifests(), local.device(),
+          registry.catalog(),
+          local.inventoryV2().then((value) => value.available || !v2Unsupported(value) ? value : local.inventory()),
+          local.declarationsV2().then((value) => value.available || !v2Unsupported(value) ? value : local.modelDeclarations()),
+          local.packageManifests(), local.device(),
         ]);
         this.value = { catalog, inventory, declarations, manifests, device, refreshed_at_ms: Date.now() };
         this.lastRefreshAtMs = this.value.refreshed_at_ms;
@@ -214,35 +222,26 @@ const requireCard = (view, id) => findModelPackage(view, id);
 const verifyPackage = async (card) => {
   const results = [];
   for (const asset of card.assets ?? []) {
-    const result = await local.describe(asset.id, { verify: true });
-    results.push({ id: asset.id, ok: result.asset?.ready === true, reason: result.asset?.reason ?? null });
+    const result = typeof local.resolutionV2 === 'function'
+      ? await local.resolutionV2(asset.id, { verify: true })
+      : await local.describe(asset.id, { verify: true });
+    const resolved = result.data?.resolution ?? result.asset;
+    results.push({ id: asset.id, ok: resolved?.ready === true, reason: resolved?.reason ?? null });
   }
   await snapshots.refresh({ force: true });
   return { package_key: card.key, assets: results, ok: results.length > 0 && results.every((item) => item.ok) };
 };
 
-const deletePackage = async (card, setStage) => {
-  setStage('deleting');
-  const removed = [];
-  const groups = new Map();
-  for (const asset of card.assets ?? []) {
-    if (!asset.installed || !asset.path) continue;
-    const identity = [asset.package_id, asset.version, asset.target, path.resolve(asset.path)].join('|');
-    if (!groups.has(identity)) groups.set(identity, asset);
-  }
-  for (const asset of groups.values()) {
-    const result = await local.purgePayload(asset.id, {
-      package_id: asset.package_id, version: asset.version, target: asset.target, path: asset.path,
-    });
-    const failure = responseError(result, `raw delete failed for ${asset.id}`);
-    if (failure) throw failure;
-    removed.push(result.data);
-  }
-  await snapshots.refresh({ force: true });
-  return { package_key: card.key, removed };
-};
-
 const operationReply = (res, result) => send(res, 202, { ok: true, operation: result.operation, deduplicated: result.deduplicated });
+
+const deleteFailureReply = (res, error) => {
+  const status = error?.code === 'confirmation_required' || error?.code === 'confirmation_invalid'
+    || error?.code === 'confirmation_package_mismatch' || error?.code === 'confirmation_payload_mismatch'
+    || error?.code === 'generation_mismatch' || error?.code === 'selection_detach_required' ? 409
+    : error?.code === 'payload_not_found' ? 404
+      : error?.code === 'payload_ledger_corrupt' ? 500 : 400;
+  return send(res, status, { ok: false, error: error?.code ?? 'delete_failed', detail: String(error?.message ?? error) });
+};
 
 const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, 'http://manager.local');
@@ -259,6 +258,49 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, packages: view.packages, summary: view.summary, refresh: snapshots.snapshot() });
     }
 
+    // Payload inventory and orphan deletion deliberately do not depend on the
+    // remote catalog snapshot. A replacement Manager must be able to take
+    // over, inspect, verify, and remove existing Core Payload facts even when
+    // its previous Manager or the catalog is unavailable.
+    if (route === '/payloads' && req.method === 'GET') {
+      const payloads = await local.payloadsV2();
+      const status = payloads.available ? 200 : payloads.error === 'payload_ledger_corrupt' ? 500 : 503;
+      return send(res, status, {
+        ok: payloads.available === true,
+        schema: payloads.schema ?? 'termux-os.asset-payload-ledger.v2',
+        generation: payloads.generation ?? null,
+        payloads: payloads.payloads ?? [],
+        selections: payloads.selections ?? [],
+        error: payloads.error ?? null,
+        detail: payloads.detail ?? null,
+      });
+    }
+    const directPayloadId = parsed.searchParams.get('id');
+    if (route === '/payload/delete-plan' && req.method === 'POST') {
+      try {
+        const plan = await deleteCoordinator.inspectPayload(directPayloadId);
+        return send(res, 200, { ok: true, plan });
+      } catch (error) { return deleteFailureReply(res, error); }
+    }
+    if (route === '/payload/delete' && (req.method === 'DELETE' || req.method === 'POST')) {
+      const body = await readJson(req);
+      let confirmation;
+      try {
+        if (!body?.confirmation_token) {
+          const plan = await deleteCoordinator.inspectPayload(directPayloadId);
+          return send(res, 409, { ok: false, error: 'confirmation_required', plan });
+        }
+        confirmation = deleteCoordinator.takePayload(directPayloadId, body.confirmation_token);
+      } catch (error) { return deleteFailureReply(res, error); }
+      const payloadId = String(directPayloadId ?? '').trim();
+      const started = operations.start('delete-payload', `payload:${payloadId}`, async ({ setStage }) => {
+        const result = await deleteCoordinator.removePayload(setStage, confirmation);
+        await snapshots.refresh({ force: true });
+        return result;
+      }, { stages: STAGES, progressPrecision: 'stage' });
+      return operationReply(res, started);
+    }
+
     const value = await snapshots.ensure();
     const view = modelView(value);
 
@@ -271,6 +313,19 @@ const server = http.createServer(async (req, res) => {
       return send(res, value.catalog?.available ? 200 : 503, { ok: value.catalog?.available === true,
         registry: { available: value.catalog?.available === true, base: REGISTRY_URL, error: value.catalog?.error ?? null },
         packages: view.packages });
+    }
+    if (route === '/resolve-transfer' && req.method === 'POST') {
+      const body = await readJson(req);
+      const requested = Array.isArray(body?.files) ? body.files : [];
+      if (!requested.length) return send(res, 400, { ok: false, error: 'transfer_files_required' });
+      const files = resolveTransferFiles(requested);
+      if (files.length !== requested.length) {
+        const resolved = new Set(files.map((file) => `${file.path}|${file.size}|${file.sha256}`));
+        const unresolved = requested.filter((file) => !resolved.has(`${file.path}|${file.size}|${String(file.sha256 ?? '').toLowerCase()}`))
+          .map((file) => file.path ?? file.remote_path ?? null).filter(Boolean);
+        return send(res, 400, { ok: false, error: 'source_coordinate_unresolved', unresolved });
+      }
+      return send(res, 200, { ok: true, schema: 'termux-os.asset-transfer-spec.v2', files });
     }
     if (route === '/installed' && req.method === 'GET') {
       return send(res, value.inventory?.available ? 200 : 503, { ok: value.inventory?.available === true,
@@ -321,11 +376,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, schema: 'termux-os.raw-asset-files.v1', files });
     }
 
-    const actionRoute = route === '/package/download' || route === '/model/download';
+    const actionRoute = route === '/package/download' || route === '/model/download'
+      || route === '/package/update' || route === '/model/update';
     if (actionRoute && req.method === 'POST') {
       const card = packageId ? requireCard(view, packageId) : null;
       if (!card) return send(res, 404, { ok: false, error: 'unknown_package' });
-      const started = operations.start('download', card.key, ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress), {
+      const update = route.endsWith('/update');
+      const started = operations.start(update ? 'update' : 'download', card.key,
+        ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress, { update }), {
         stages: STAGES, progressPrecision: 'bytes',
       });
       return operationReply(res, started);
@@ -344,10 +402,13 @@ const server = http.createServer(async (req, res) => {
       req.pipe(stream);
       const started = operations.start('import', `archive:${Date.now()}`, async ({ setStage }) => {
         setStage('importing');
-        const imported = await local.importArchive(stream, {
+        const imported = await (typeof local.importArchiveV2 === 'function' ? local.importArchiveV2(stream, {
           contentType: req.headers['content-type'] || 'application/gzip',
           contentLength: req.headers['content-length'],
-        });
+        }) : local.importArchive(stream, {
+          contentType: req.headers['content-type'] || 'application/gzip',
+          contentLength: req.headers['content-length'],
+        }));
         const failure = responseError(imported, 'raw archive import failed');
         if (failure) throw failure;
         await snapshots.refresh({ force: true });
@@ -355,11 +416,32 @@ const server = http.createServer(async (req, res) => {
       }, { stages: STAGES, progressPrecision: 'stage' });
       return operationReply(res, started);
     }
-    if ((route === '/package/delete' || route === '/model/delete') && req.method === 'DELETE') {
+    if ((route === '/package/delete-plan' || route === '/model/delete-plan') && req.method === 'POST') {
       const card = packageId ? requireCard(view, packageId) : null;
       if (!card) return send(res, 404, { ok: false, error: 'unknown_package' });
-      if (card.usage?.count) return send(res, 409, { ok: false, error: 'package_in_use', usage: card.usage });
-      const started = operations.start('delete', card.key, ({ setStage }) => deletePackage(card, setStage), {
+      try {
+        const plan = await deleteCoordinator.inspect(card);
+        return send(res, 200, { ok: true, plan });
+      } catch (error) { return deleteFailureReply(res, error); }
+    }
+    if ((route === '/package/delete' || route === '/model/delete')
+      && (req.method === 'DELETE' || req.method === 'POST')) {
+      const card = packageId ? requireCard(view, packageId) : null;
+      if (!card) return send(res, 404, { ok: false, error: 'unknown_package' });
+      const body = await readJson(req);
+      let confirmation;
+      try {
+        if (!body?.confirmation_token) {
+          const plan = await deleteCoordinator.inspect(card);
+          return send(res, 409, { ok: false, error: 'confirmation_required', plan });
+        }
+        confirmation = deleteCoordinator.take(card.key, body.confirmation_token);
+      } catch (error) { return deleteFailureReply(res, error); }
+      const started = operations.start('delete', card.key, async ({ setStage }) => {
+        const result = await deleteCoordinator.remove(card, setStage, confirmation);
+        await snapshots.refresh({ force: true });
+        return result;
+      }, {
         stages: STAGES, progressPrecision: 'stage',
       });
       return operationReply(res, started);

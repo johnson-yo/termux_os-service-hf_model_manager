@@ -78,7 +78,7 @@ export async function register(context) {
   };
 
   for (const route of ['/overview', '/catalog', '/packages', '/models', '/assets', '/installed', '/declarations',
-    '/live', '/events', '/operations']) proxy('GET', route);
+    '/payloads', '/live', '/events', '/operations']) proxy('GET', route);
   proxy('POST', '/refresh', 120_000);
   streamProxy('POST', '/package/import');
   streamProxy('POST', '/model/import');
@@ -101,10 +101,19 @@ export async function register(context) {
   byId('GET', '/file', (id, query) => `/file?id=${id}&path=${encodeURIComponent(query.get('path') || '')}`);
   byId('POST', '/package/download', (id) => `/package/download?id=${id}`, 3_600_000);
   byId('POST', '/model/download', (id) => `/package/download?id=${id}`, 3_600_000);
+  byId('POST', '/package/update', (id) => `/package/update?id=${id}`, 3_600_000);
+  byId('POST', '/model/update', (id) => `/package/update?id=${id}`, 3_600_000);
   byId('POST', '/package/verify', (id) => `/package/verify?id=${id}`, 3_600_000);
   byId('POST', '/model/verify', (id) => `/package/verify?id=${id}`, 3_600_000);
+  byId('POST', '/package/delete-plan', (id) => `/package/delete-plan?id=${id}`, 120_000);
+  byId('POST', '/model/delete-plan', (id) => `/package/delete-plan?id=${id}`, 120_000);
   byId('DELETE', '/package/delete', (id) => `/package/delete?id=${id}`, 120_000);
   byId('DELETE', '/model/delete', (id) => `/package/delete?id=${id}`, 120_000);
+  byId('POST', '/package/delete', (id) => `/package/delete?id=${id}`, 120_000);
+  byId('POST', '/model/delete', (id) => `/package/delete?id=${id}`, 120_000);
+  byId('POST', '/payload/delete-plan', (id) => `/payload/delete-plan?id=${id}`, 120_000);
+  byId('DELETE', '/payload/delete', (id) => `/payload/delete?id=${id}`, 120_000);
+  byId('POST', '/payload/delete', (id) => `/payload/delete?id=${id}`, 120_000);
   byId('GET', '/operation', (id) => `/operations/${id}`);
 
   context.actions.register({
@@ -127,20 +136,46 @@ export async function register(context) {
         case 'catalog': return (await request('/catalog')).data;
         case 'installed': return (await request('/installed')).data;
         case 'declarations': return (await request('/declarations')).data;
+        case 'payloads': return (await request('/payloads')).data;
         case 'package': case 'model': return id ? (await request(`/package?id=${id}`)).data : { ok: false, error: 'package_key required' };
         case 'file': {
           if (!id || !command.path) return { ok: false, error: 'package_key and path required' };
           return (await request(`/file?id=${id}&path=${encodeURIComponent(command.path)}`)).data;
         }
         case 'refresh': return (await request('/refresh', { method: 'POST', body: { force: true }, timeoutMs: 120_000 })).data;
-        case 'download': case 'verify': {
+        case 'resolve_transfer': {
+          if (!Array.isArray(command.files) || !command.files.length) return { ok: false, error: 'transfer_files_required' };
+          return (await request('/resolve-transfer', { method: 'POST', body: { files: command.files }, timeoutMs: 120_000 })).data;
+        }
+        case 'download': case 'update': case 'verify': {
           if (!id) return { ok: false, error: 'package_key required' };
-          const route = command.op === 'download' ? 'download' : 'verify';
+          const route = command.op === 'download' || command.op === 'update' ? command.op : 'verify';
           return (await request(`/package/${route}?id=${id}`, { method: 'POST', body: {}, timeoutMs: 3_600_000 })).data;
+        }
+        case 'delete-plan': {
+          if (!id) return { ok: false, error: 'package_key required' };
+          return (await request(`/package/delete-plan?id=${id}`, { method: 'POST', body: {}, timeoutMs: 120_000 })).data;
         }
         case 'remove': {
           if (!id) return { ok: false, error: 'package_key required' };
-          const result = await request(`/package/delete?id=${id}`, { method: 'DELETE', body: {}, timeoutMs: 120_000 });
+          const result = await request(`/package/delete?id=${id}`, {
+            method: command.confirmation_token ? 'POST' : 'DELETE',
+            body: command.confirmation_token ? { confirmation_token: command.confirmation_token } : {},
+            timeoutMs: 120_000,
+          });
+          return { ...result.data, http_status: result.status };
+        }
+        case 'payload-delete-plan': {
+          if (!id) return { ok: false, error: 'payload_id required' };
+          return (await request(`/payload/delete-plan?id=${id}`, { method: 'POST', body: {}, timeoutMs: 120_000 })).data;
+        }
+        case 'payload-remove': {
+          if (!id) return { ok: false, error: 'payload_id required' };
+          const result = await request(`/payload/delete?id=${id}`, {
+            method: command.confirmation_token ? 'POST' : 'DELETE',
+            body: command.confirmation_token ? { confirmation_token: command.confirmation_token } : {},
+            timeoutMs: 120_000,
+          });
           return { ...result.data, http_status: result.status };
         }
         case 'operation': {
@@ -150,8 +185,9 @@ export async function register(context) {
         case 'operations': return (await request('/operations')).data;
         case 'events': return (await request(`/events?after=${Number(command.after) || 0}&limit=${Number(command.limit) || 100}`)).data;
         default: return { ok: false, error: 'unknown_op', supported: [
-          'summary', 'packages', 'models', 'catalog', 'installed', 'declarations', 'package', 'model', 'file',
-          'refresh', 'download', 'verify', 'remove', 'operation', 'operations', 'events',
+          'summary', 'packages', 'models', 'catalog', 'installed', 'declarations', 'payloads', 'package', 'model', 'file',
+          'refresh', 'resolve_transfer', 'download', 'update', 'verify', 'delete-plan', 'remove',
+          'payload-delete-plan', 'payload-remove', 'operation', 'operations', 'events',
         ] };
       }
     },

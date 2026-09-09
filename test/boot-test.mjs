@@ -42,7 +42,7 @@ for (let i = 0; i < 50; i += 1) {
 }
 test('raw-only service boots', ready, stderr.slice(-300));
 if (ready) {
-  for (const route of ['/live', '/overview', '/packages', '/models', '/assets', '/installed', '/catalog', '/declarations', '/operations', '/events']) {
+  for (const route of ['/live', '/overview', '/packages', '/models', '/assets', '/installed', '/catalog', '/declarations', '/payloads', '/operations', '/events']) {
     const result = await call(route);
     test(`${route} never returns an internal error during source outage`, result.status !== 500);
   }

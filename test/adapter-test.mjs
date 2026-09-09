@@ -48,5 +48,19 @@ test('operation reaches complete with real byte completion', ops.get(started.ope
   && ops.get(started.operation.operation_id).resume_from_bytes === 2);
 test('stages contain only raw Asset lifecycle phases', STAGES.join(',') === 'resolving,downloading,verifying,importing,deleting,done');
 
+const ledgerErrorAdapter = new FrameworkAssets({ base: 'http://core', key: 'system', fetchImpl: async () => ({
+  ok: false, status: 500, json: async () => ({ error: 'payload_ledger_corrupt', detail: 'bad ledger' }),
+}) });
+const ledgerError = await ledgerErrorAdapter.payloadsV2();
+test('payload inventory preserves Core ledger corruption', ledgerError.error === 'payload_ledger_corrupt' && ledgerError.status === 500);
+
+const selectionCalls = [];
+const clearAdapter = new FrameworkAssets({ base: 'http://core', key: 'system', fetchImpl: async (url, options) => {
+  selectionCalls.push({ url, options });
+  return { ok: true, status: 200, json: async () => ({ ok: true }) };
+} });
+await clearAdapter.setSelectionV2('asset.raw');
+test('selection adapter can explicitly clear a Selection', JSON.parse(selectionCalls[0].options.body).payload_id === null);
+
 console.log(`${count}/${count} assertions passed`);
 process.exit(failures ? 1 : 0);

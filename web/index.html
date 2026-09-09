@@ -36,6 +36,17 @@
     <div id="package-list"><p class="note">尚未读取。</p></div>
   </section>
 </main>
+<dialog id="delete-dialog">
+  <form method="dialog">
+    <h2>确认删除原始 Payload</h2>
+    <p class="note">这只删除原始模型文件，不注销 Asset Declaration；之后仍可由 Manager 重新下载。</p>
+    <pre id="delete-impact" class="impact"></pre>
+    <div class="row between">
+      <button type="button" class="ghost" data-delete-cancel>取消</button>
+      <button type="button" data-delete-confirm>确认删除</button>
+    </div>
+  </form>
+</dialog>
 <script src="/admin/session.js"></script>
 <script src="app.js"></script>
 </body>

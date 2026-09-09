@@ -42,6 +42,77 @@ const base = (overrides = {}) => ({
   ready: false, fetchable: true, fetch_blocked_reason: null, ...overrides,
 });
 
+// v2 transfer path: the Manager supplies the URL only for the live request,
+// gives Core a stable idempotency key, and resubmits the file spec on retry so
+// a Core restart can resume from its journal/staging state.
+{
+  const calls = [];
+  const transferFiles = [{ path: 'model.bin', url: 'https://source.example/model.bin', size: 4, sha256: 'a'.repeat(64) }];
+  let createCount = 0;
+  const local = {
+    async createTransfer(input) { createCount++; calls.push({ kind: 'create', input }); return { ok: true, status: 201, data: { operation: { operation_id: 'core-op-1' } } }; },
+    async runTransfer(id, input) { calls.push({ kind: 'run', id, input }); return { ok: true, status: 200, data: { operation: { result: { bytes_done: 4, bytes_total: 4, progress: 100 } } } }; },
+    async resolutionV2(id) { calls.push({ kind: 'verify', id }); return { ok: true, status: 200, data: { resolution: { id, ready: true } } }; },
+  };
+  const run = createDownloadPackage({ local, refreshCard: async () => ({ key: 'pkg.v2', assets: [base({
+    id: 'asset.v2', optional: false, ready: false, declared: true, fetchable: true,
+    target: 'generic', ledger_generation: 8, transfer_files: transferFiles,
+  })] }), sleepImpl: async () => {} });
+  const card = { key: 'pkg.v2', assets: [base({ id: 'asset.v2', optional: false, ready: false, declared: true,
+    fetchable: true, target: 'generic', ledger_generation: 8, transfer_files: transferFiles })] };
+  await run(card);
+  const key = calls.find((item) => item.kind === 'create')?.input.idempotencyKey;
+  await run(card);
+  test('v2 transfer is resumable and idempotent across Manager retries', createCount === 2
+    && key?.startsWith('asset-transfer-v2:')
+    && calls.filter((item) => item.kind === 'create').every((item) => item.input.idempotencyKey === key)
+    && calls.filter((item) => item.kind === 'run').every((item) => item.input.files === transferFiles));
+}
+
+// A failed replacement is not allowed to masquerade as a successful update or
+// trigger a second selection/verification step. Core's CAS test covers the
+// Ledger-side old Selection; this seam covers Manager-side failure handling.
+{
+  const calls = [];
+  const transferFiles = [{ path: 'model.bin', url: 'https://source.example/replacement.bin', size: 4, sha256: 'c'.repeat(64) }];
+  const local = {
+    async createTransfer(input) { calls.push({ kind: 'create', input }); return { ok: true, status: 201, data: { operation: { operation_id: 'failed-update-op' } } }; },
+    async runTransfer(id) { calls.push({ kind: 'run', id }); return { ok: false, status: 409, data: { error: 'generation_mismatch' } }; },
+    async resolutionV2(id) { calls.push({ kind: 'verify', id }); return { ok: true, status: 200, data: { resolution: { id, ready: true } } }; },
+  };
+  const run = createDownloadPackage({ local, refreshCard: async () => ({ key: 'pkg.failed-update', assets: [base({
+    id: 'asset.failed-update', ready: false, declared: true, fetchable: true, payload_id: 'old-payload',
+    ledger_generation: 11, transfer_files: transferFiles,
+  })] }), sleepImpl: async () => {} });
+  let failed = null;
+  try {
+    await run({ key: 'pkg.failed-update', assets: [base({ id: 'asset.failed-update', ready: false,
+      declared: true, fetchable: true, payload_id: 'old-payload', ledger_generation: 11, transfer_files: transferFiles })] },
+    () => {}, () => {}, { update: true });
+  } catch (error) { failed = error; }
+  test('failed update remains retryable without a false verification', failed?.code === 'generation_mismatch'
+    && calls.length === 2 && calls[0].kind === 'create' && calls[1].kind === 'run');
+}
+
+// A ready predecessor is still updateable when the caller explicitly asks for
+// update.  The old selection remains the verification fallback only after the
+// replacement transfer returns successfully.
+{
+  const calls = [];
+  const transferFiles = [{ path: 'model.bin', url: 'https://source.example/new.bin', size: 4, sha256: 'b'.repeat(64) }];
+  const local = {
+    async createTransfer(input) { calls.push({ kind: 'create', input }); return { ok: true, status: 201, data: { operation: { operation_id: 'update-op' } } }; },
+    async runTransfer(id, input) { calls.push({ kind: 'run', id, input }); return { ok: true, status: 200, data: { operation: { result: { bytes_done: 4, bytes_total: 4, progress: 100 } } } }; },
+    async resolutionV2(id) { calls.push({ kind: 'verify', id }); return { ok: true, status: 200, data: { resolution: { id, ready: true } } }; },
+  };
+  const candidate = base({ id: 'asset.ready-update', ready: true, payload_state: 'ready', declared: true,
+    fetchable: false, target: 'generic', ledger_generation: 12, payload_id: 'old-payload', transfer_files: transferFiles });
+  const run = createDownloadPackage({ local, refreshCard: async () => ({ key: 'pkg.ready-update', assets: [candidate] }), sleepImpl: async () => {} });
+  await run({ key: 'pkg.ready-update', assets: [candidate] }, () => {}, () => {}, { update: true });
+  test('explicit update replaces a still-ready predecessor', calls[0]?.kind === 'create'
+    && calls[1]?.kind === 'run' && calls.some((item) => item.kind === 'verify'));
+}
+
 // A: a declared optional provider goes straight to Framework /fetch.
 {
   const scenario = makeScenario({ initial: base() });

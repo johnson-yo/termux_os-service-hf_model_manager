@@ -9,11 +9,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSemver } from './cf.mjs';
+import { resolveTransferFile, resolveTransferFiles } from './transfer-sources.mjs';
 
 const sourceOf = (file) => file?.source ?? file?.file_source ?? file?.host ?? null;
 const repoOf = (file) => file?.repository ?? file?.repo ?? null;
 const remoteOf = (file) => file?.remote_path ?? file?.remotePath ?? file?.file_path ?? null;
 const localOf = (file) => file?.local_path ?? file?.path ?? file?.name ?? null;
+
+const transferUrl = (file) => resolveTransferFile({
+  ...file,
+  path: file?.path ?? file?.local_path ?? localOf(file),
+  repository: file?.repository ?? file?.repo ?? repoOf(file),
+  source: file?.source ?? file?.file_source ?? file?.host ?? sourceOf(file),
+})?.url ?? null;
 
 /** Catalog identity is deliberately not derived from a package-id prefix. */
 export const packageKey = ({ source, repository } = {}) => `${source ?? 'unknown'}:${repository ?? 'unknown'}`;
@@ -39,7 +47,9 @@ const manifestFileRecords = (manifests) => {
           repository,
           path: localPath,
           remote_path: typeof file.remote_path === 'string' ? file.remote_path : null,
+          url: transferUrl(file),
           revision: file.revision ?? null,
+          role: typeof file.role === 'string' ? file.role : null,
           size: Number.isFinite(Number(file.size)) ? Number(file.size) : null,
           sha256: typeof file.sha256 === 'string' ? file.sha256.toLowerCase() : null,
           asset_id: asset.id ?? null,
@@ -54,9 +64,41 @@ const manifestFileRecords = (manifests) => {
   return records;
 };
 
+/** v2 declarations are the source of provider/path facts even when a Package service is unloaded. */
+const declarationFileRecords = (declarations) => {
+  const records = [];
+  for (const declaration of declarations ?? []) {
+    for (const file of declaration?.source?.files ?? []) {
+      const localPath = typeof file?.path === 'string' ? file.path : null;
+      if (!localPath) continue;
+      records.push({
+        source: sourceOf(file) ?? sourceOf(declaration.source) ?? 'huggingface',
+        repository: repoOf(file) ?? repoOf(declaration.source),
+        path: localPath,
+        remote_path: typeof file.remote_path === 'string' ? file.remote_path : null,
+        url: transferUrl(file),
+        revision: file.revision ?? null,
+        role: typeof file.role === 'string' ? file.role : null,
+        size: Number.isFinite(Number(file.size)) ? Number(file.size) : null,
+        sha256: typeof file.sha256 === 'string' ? file.sha256.toLowerCase() : null,
+        asset_id: declaration.asset_id ?? null,
+        asset_package_id: declaration.package_id ?? null,
+        target: declaration.variant_id ?? 'generic',
+        payload: declaration.payload ?? null,
+        optional: declaration.optional === true,
+      });
+    }
+  }
+  return records;
+};
+
 const inventoryMap = (inventory) => new Map((inventory?.assets ?? [])
   .filter((asset) => asset?.id || asset?.asset_id)
   .map((asset) => [asset.id ?? asset.asset_id, asset]));
+
+const payloadMap = (inventory) => new Map((inventory?.payloads ?? [])
+  .filter((payload) => typeof payload?.payload_id === 'string')
+  .map((payload) => [payload.payload_id, payload]));
 
 const safeCandidate = (root, relative) => {
   if (!root || typeof relative !== 'string' || !relative || path.isAbsolute(relative)) return null;
@@ -86,19 +128,15 @@ const sameCoordinate = (file, manifest) => {
   if (file.source !== manifest.source || file.repository !== manifest.repository) return false;
   const fileRemote = file.remote_path ?? null;
   const manifestRemote = manifest.remote_path ?? null;
-  const revisionMatch = !file.revision || !manifest.revision || file.revision === manifest.revision;
-  const hashMatch = !file.sha256 || !manifest.sha256 || file.sha256 === manifest.sha256;
-  // A Package manifest can be installed from a catalog revision that has
-  // since been republished under a new immutable source revision while the
-  // approved bytes remain identical. Keep the Registry file ledger
-  // authoritative, but permit that drift only with the full remote coordinate
-  // plus both size and SHA-256—not a basename or a guessed provider match.
-  const sameBytes = file.sha256 && manifest.sha256 && file.sha256 === manifest.sha256
-    && file.size !== null && manifest.size !== null && file.size === manifest.size;
-  const remoteMatch = fileRemote && manifestRemote
-    ? fileRemote === manifestRemote
-    : (file.path ?? file.name) === manifest.path;
-  return remoteMatch && hashMatch && (revisionMatch || sameBytes);
+  // The source coordinate is authoritative when both sides expose it.  A
+  // catalog may describe a repository-relative path (for example
+  // `graph/htp-t148/model.onnx`) while a Package manifest describes the final
+  // local destination (`model.onnx`); requiring those two different path
+  // namespaces to be equal would hide a valid provider.  Remote path,
+  // source, and repository still make the association exact, and revision or
+  // digest are intentionally allowed to change because they signal an update.
+  if (fileRemote && manifestRemote) return fileRemote === manifestRemote;
+  return (file.path ?? file.name) === manifest.path;
 };
 
 /** Registry is the sole file ledger; manifests only add exact provider maps. */
@@ -154,6 +192,20 @@ const localFileState = (file, providers) => {
     for (const mapping of provider.files) {
       if (mapping.file_key !== key) continue;
       const candidate = safeCandidate(provider.path, mapping.path);
+      // A v2 payload record is Core's verified byte fact.  If the catalog now
+      // exposes a new digest at this exact source/local coordinate, the old
+      // selected object is an installed predecessor—not a corrupt copy and
+      // not the new file. Keep its path/bytes for the update UI, but do not
+      // report it as ready.
+      const selectedFile = provider.payload_record?.files?.find((item) => item.path === mapping.path);
+      if (selectedFile && (selectedFile.size !== file.size || selectedFile.sha256 !== file.sha256)) {
+        let bytes = 0;
+        try { bytes = candidate && fs.statSync(candidate).size; } catch { /* old object may be absent */ }
+        return {
+          state: 'stale', path: candidate, bytes, payload_id: provider.payload_record.payload_id,
+          previous_sha256: selectedFile.sha256, previous_size: selectedFile.size,
+        };
+      }
       if (candidate && !candidates.some((item) => item.path === candidate)) {
         candidates.push({ path: candidate, asset_id: provider.id });
       }
@@ -173,7 +225,7 @@ const localFileState = (file, providers) => {
   return partPath ? { state: 'partial', part_path: partPath.path, bytes: partPath.bytes } : { state: 'none', bytes: 0 };
 };
 
-const providersFor = (records, byId, catalogProvides = []) => {
+const providersFor = (records, byId, catalogProvides = [], generation = null, payloads = new Map()) => {
   const entries = new Map();
   for (const record of records) {
     for (const id of record.asset_ids) {
@@ -188,31 +240,47 @@ const providersFor = (records, byId, catalogProvides = []) => {
   }
   return [...entries.values()].map(({ id, firstRecord, provided }) => {
     const local = byId.get(id);
+    const selectedPayloadId = local?.payload_id ?? local?.selection?.payload_id ?? null;
+    const payloadRecord = selectedPayloadId ? payloads.get(selectedPayloadId) ?? null : null;
     const mappings = records
       .filter((record) => record.asset_ids.includes(id))
       .flatMap((record) => record.manifest_files
         .filter((item) => item.asset_id === id)
-        .map((item) => ({ file_key: coordinateKey(record), path: item.path, optional: item.optional })));
-    const packageId = local?.package_id ?? local?.package ?? firstRecord?.asset_package_ids?.[0]
+        .map((item) => ({ file_key: coordinateKey(record), path: item.path, optional: item.optional, record })));
+    const packageId = local?.package_id ?? local?.package ?? local?.declaration?.package_id
+      ?? firstRecord?.asset_package_ids?.[0]
       ?? provided?.package_id ?? null;
-    const loaded = Boolean(local?.declared_by || local?.path || local?.ready === true
+    const loaded = local?.runtime_state ? local.runtime_state === 'loaded' : Boolean(local?.declared_by || local?.path || local?.ready === true
       || local?.ready === false && local?.reason);
-    const declared = Boolean(firstRecord || local?.declared_by);
+    const declared = Boolean(firstRecord || local?.declared_by || local?.registration_state === 'registered' || local?.declaration);
+    const installed = local?.payload_state === 'ready' || Boolean(local?.path && local?.ready !== false);
+    const transferFiles = resolveTransferFiles(mappings.map((item) => ({
+      ...item.record,
+      path: item.record?.path ?? item.path,
+      url: item.record?.url ?? transferUrl(item.record),
+    })).filter((file, index, list) => list.findIndex((other) => coordinateKey(other) === coordinateKey(file)) === index));
     return {
       id,
       package_id: packageId,
-      version: local?.version ?? null,
-      target: local?.target ?? firstRecord?.targets?.[0] ?? 'generic',
+      version: local?.version ?? local?.declaration?.package_version ?? null,
+      target: local?.target ?? local?.declaration?.variant_id ?? firstRecord?.targets?.[0] ?? 'generic',
       path: local?.path ?? null,
+      payload_id: selectedPayloadId,
+      payload_record: payloadRecord,
+      selection: local?.selection ?? null,
+      declaration: local?.declaration ?? null,
+      runtime_state: local?.runtime_state ?? null,
       ready: local?.ready === true,
       reason: local?.reason ?? null,
       declared,
       loaded,
       provider_state: loaded ? 'loaded' : 'absent',
-      installed: Boolean(local?.path),
+      installed,
       optional: mappings.length ? (mappings.every((item) => item.optional) ? true : false) : null,
-      installable: !loaded && Boolean(packageId),
+      installable: !declared && Boolean(packageId),
       files: mappings,
+      transfer_files: transferFiles,
+      ledger_generation: generation,
     };
   });
 };
@@ -222,22 +290,24 @@ const payloadState = (files) => {
   if (!states.length) return 'missing';
   if (states.every((state) => state === 'complete')) return 'ready';
   if (states.some((state) => state === 'error')) return 'error';
-  if (states.some((state) => state === 'complete' || state === 'partial')) return 'partial';
+  if (states.some((state) => state === 'complete' || state === 'partial' || state === 'stale')) return 'partial';
   return 'missing';
 };
 
 const enrichProviders = (providers, files) => providers.map((provider) => {
   const owned = files.filter((file) => file.asset_ids.includes(provider.id));
   const state = payloadState(owned);
-  const ready = provider.ready || (provider.loaded && state === 'ready');
   const hasSource = owned.length > 0;
-  const fetchable = provider.loaded && provider.optional === true && !ready && hasSource;
+  // When a catalog file is mapped to this provider, its complete state must
+  // be based on the current catalog manifest. A Core-ready predecessor must
+  // not mask a newer catalog digest and suppress the update action.
+  const ready = hasSource ? state === 'ready' : false;
+  const fetchable = provider.declared && !ready && hasSource && provider.transfer_files?.length > 0;
   let fetchBlockedReason = null;
   if (ready) fetchBlockedReason = null;
   else if (fetchable) fetchBlockedReason = null;
-  else if (!provider.loaded) fetchBlockedReason = provider.installable ? 'provider_not_loaded' : 'provider_unavailable';
+  else if (!provider.declared) fetchBlockedReason = provider.installable ? 'provider_package_not_installed' : 'provider_unavailable';
   else if (!hasSource) fetchBlockedReason = 'provider_source_missing';
-  else if (provider.optional !== true) fetchBlockedReason = 'required_asset_install';
   else fetchBlockedReason = provider.reason ?? 'asset_not_fetchable';
   return {
     ...provider,
@@ -254,16 +324,16 @@ const declarationsFor = (project, declarations) => (declarations?.declarations ?
   .filter((item) => item.source === project.source && item.identity === project.repository)
   .map((item) => ({ package_id: item.package_id, active_version: item.active_version, path: item.path }));
 
-const buildCard = (project, { manifestRecords, byId, declarations, registryAvailable, frameworkAvailable = true }) => {
+const buildCard = (project, { manifestRecords, byId, payloads, declarations, inventoryGeneration = null, registryAvailable, frameworkAvailable = true }) => {
   const records = mergeFiles(project, manifestRecords);
-  const providers = providersFor(records, byId, project.provides);
+  const providers = providersFor(records, byId, project.provides, inventoryGeneration, payloads);
   const files = records.map((file) => ({ ...file, local: localFileState(file, providers) }));
   const resolvedProviders = enrichProviders(providers, files);
   const states = files.map((file) => file.local.state);
   const status = !registryAvailable || !frameworkAvailable ? 'unknown'
     : files.some((file) => file.local.state === 'error') ? 'error'
       : files.length > 0 && files.every((file) => file.local.state === 'complete') ? 'complete'
-        : states.some((state) => state === 'complete' || state === 'partial') ? 'partial' : 'none';
+        : states.some((state) => state === 'complete' || state === 'partial' || state === 'stale') ? 'partial' : 'none';
   const mismatch = files.find((file) => file.local.mismatch)?.local.mismatch ?? null;
   const usage = declarationsFor(project, declarations);
   const actionable = resolvedProviders.some((provider) => provider.ready || provider.fetchable || provider.installable);
@@ -296,6 +366,8 @@ const buildCard = (project, { manifestRecords, byId, declarations, registryAvail
     usage: { consumers: usage, count: usage.length },
     actions: {
       download: status !== 'complete' && actionable,
+      update: resolvedProviders.some((provider) => provider.declared
+        && Array.isArray(provider.transfer_files) && provider.transfer_files.length > 0),
       continue: status === 'partial' && actionable,
       retry: status === 'error' && actionable,
       verify: status === 'complete' || resolvedProviders.some((provider) => provider.ready),
@@ -312,8 +384,12 @@ export function buildModelPackages({
   inventory = { available: false, assets: [] },
   declarations = { available: false, declarations: [] },
 } = {}) {
-  const manifestRecords = manifestFileRecords(manifests);
+  const manifestRecords = [
+    ...manifestFileRecords(manifests),
+    ...declarationFileRecords(declarations?.declarations ?? inventory?.declarations ?? []),
+  ];
   const byId = inventoryMap(inventory);
+  const payloads = payloadMap(inventory);
   // No local-only fallback: an active Manager card requires an explicit active
   // Registry project with package_id and a raw file list.
   const cards = (catalog.projects ?? [])
@@ -321,7 +397,9 @@ export function buildModelPackages({
     .map((project) => buildCard(project, {
       manifestRecords,
       byId,
+      payloads,
       declarations,
+      inventoryGeneration: inventory.generation ?? null,
       registryAvailable: catalog.available === true,
       frameworkAvailable: inventory.available === true,
     }));
@@ -339,7 +417,7 @@ export function buildModelPackages({
 
 export const findModelPackage = (value, key) => (value?.packages ?? []).find((item) => item.key === key) ?? null;
 
-export const __test = { manifestFileRecords, mergeFiles, localFileState, coordinateKey, sameCoordinate };
+export const __test = { manifestFileRecords, mergeFiles, localFileState, coordinateKey, sameCoordinate, transferUrl };
 
 // ============================================================
 // Self-test: node service/model-packages.mjs --self-test

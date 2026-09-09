@@ -2,13 +2,13 @@
   "schema": "termux-os.package.v1",
   "id": "github.termux-os.service.hf-model-manager",
   "name": "模型管理",
-  "version": "0.4.4",
-  "description": "Raw-only model package catalog and file manager: Registry file metadata, Framework-owned transfer, local file status, archive import, and safe deletion",
+  "version": "0.4.5",
+  "description": "Raw-only model package catalog and file manager: Registry metadata, Manager-selected sources, Framework-owned transfer, local status, update, archive import, and confirmed deletion",
   "types": [
     "service"
   ],
   "compatibility": {
-    "framework": ">=0.3.3"
+    "framework": ">=0.3.4"
   },
   "entrypoints": {
     "backend": "package.mjs",

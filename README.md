@@ -5,12 +5,22 @@ catalog and file manager. One package card is one approved Registry project and
 its real source/repository identity. Every approved raw file is shown inside
 that package card, including multifile and multi-source packages.
 
-This package does not prepare, execute, or decide readiness for any consumer.
-It does not own a second model ledger, write the shared model store directly,
-remove consumer caches, or infer a source from a Package id. Framework Core
-owns the Asset Registry, shared-store path, direct-first download with
-Registry fallback, `.part` resume, hash/size verification, atomic rename,
-archive import, and generic raw purge. Consumers own their own runtime policy.
+An Asset Package is the installable Package that declares/registers an Asset and
+may provision its payload during Package installation. This Manager is
+independently replaceable and owns the payload lifecycle after registration:
+source selection, download, resume, verification, storage, update, deletion,
+and the user warning/confirmation for destructive actions. It may use
+Framework Core's policy-free path, transfer, integrity, archive, and atomic
+storage primitives, but Core must not decide whether this Manager may perform a
+payload operation based on `optional`, provider/package load state, consumer
+declarations, or source-specific policy. Deleting an Asset payload does not
+unregister its Asset Package or declaration.
+
+This package does not prepare, execute, or decide readiness for any consumer. It
+does not remove consumer caches, infer a source from a Package id, or merge raw
+payload state with runtime/ctx state. The current implementation uses the v2
+Core path when available and keeps the old Core route only as an explicitly
+scoped compatibility bridge; the bridge is not the lifecycle authority.
 
 ## Identity and local declarations
 
@@ -44,21 +54,26 @@ The Framework package prefix is:
 | GET | `/catalog` | Registry availability and package cards |
 | GET | `/installed` | Framework Asset inventory |
 | GET | `/declarations` | current `.models` users and explicit errors |
+| GET | `/payloads` | Core Payload inventory, including unselected orphan Payloads |
 | POST | `/refresh` | refresh Registry, Framework inventory, declarations, and manifests |
-| POST | `/package/download?id=...` | download/continue/retry via Framework; returns an operation |
-| POST | `/package/verify?id=...` | explicit Framework hash verification; returns an operation |
-| DELETE | `/package/delete?id=...` | delete raw payloads after usage guard; returns an operation |
-| POST | `/package/import` | stream a `tar.gz` raw Asset archive to Framework |
+| POST | `/package/download?id=...` | Manager-owned download/continue/retry; may use Core primitives; returns an operation |
+| POST | `/package/verify?id=...` | Manager-owned explicit payload verification; returns an operation |
+| DELETE | `/package/delete?id=...` | show usage warning, require confirmation, then delete raw payloads; returns an operation |
+| POST | `/payload/delete-plan?id=...` | show impact for a Payload without requiring a catalog card |
+| DELETE/POST | `/payload/delete?id=...` | require the plan token, then delete one Payload; returns an operation |
+| POST | `/package/import` | Manager-owned raw Asset archive import; may use Core safety primitives |
 | GET | `/operations` and `/operation?id=...` | operation state and real byte progress |
 | GET | `/events?after=...` | bounded cursor feed |
 
 Each Registry file carries `source`, `repository`, immutable `revision`,
 `remote_path`, `local_path`, size, SHA-256, and optional `role`. The Manager
 does not scan an upstream tree, guess a basename, or add a file from a local
-manifest. A manifest only maps an approved file to its Framework Asset
-provider. If an installed manifest has a different source revision for the
-same bytes, the map is accepted only with the same source/repository/path,
-size, and SHA-256; the Manager never falls back to a basename guess.
+manifest. An installed Asset Package manifest registers the Asset identity;
+the Manager associates an approved Registry file with that registered Asset
+without turning registration into a payload permission gate. If an installed
+manifest has a different source revision for the same bytes, the map is
+accepted only with the same source/repository/path, size, and SHA-256; the
+Manager never falls back to a basename guess.
 `total_bytes` and `downloaded_bytes` are package-card fields;
 operation snapshots additionally expose the package/provider/asset/file,
 real `bytes_done`/`bytes_total`, byte-precision `progress`, `speed_bps`, the
@@ -71,12 +86,13 @@ actions. “占用情况” means the current `.models` declaration scan; an emp
 scan is shown as `没有当前声明的使用者`.
 
 The capability `termux-os.assets.manager` exposes the same read and lifecycle
-operations without hard-coding this Package id. Consumers should make the
-capability dependency optional.
+operations without hard-coding this Package id. It additionally supports
+`payloads`, `payload-delete-plan`, and `payload-remove` for orphan Payloads.
+Consumers should make the capability dependency optional.
 
 ## Archive format
 
-Framework accepts a `tar.gz` containing:
+The Manager accepts a `tar.gz` containing:
 
 ```text
 termux-os.asset-archive.json
@@ -84,10 +100,12 @@ payload/<asset>/<declared-file>
 ```
 
 The manifest is `termux-os.asset-archive.v1` and declares package id, version,
-target, each Asset id, and every file's relative path, size, and sha256. Core
-rejects traversal, symlinks, special files, missing files, hash/size mismatch,
-and conflicting existing bytes. The manager only streams the archive; it never
-extracts into the shared model store.
+target, each registered Asset id, and every file's relative path, size, and
+sha256. The Manager owns the import decision and payload landing. It may call
+Core's generic archive/path/integrity primitives; those primitives reject
+traversal, symlinks, special files, missing files, hash/size mismatch, and
+unsafe destinations, but they do not unregister an Asset or decide whether the
+Manager may import it.
 
 ## Development and verification
 

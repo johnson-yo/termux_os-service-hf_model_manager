@@ -6,12 +6,15 @@
  * [PROTOCOL]: The manager delegates bytes, hashes, resume, atomicity, and shared-store ownership to Core.
  */
 
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 export class FrameworkAssets {
   constructor({
     base = process.env.TERMUX_OS_FRAMEWORK_URL || '',
-    key = process.env.TERMUX_OS_SYSTEM_KEY || '',
+    // A loaded Package receives its own revocable Core credential.  Keep the
+    // system key fallback only for standalone/dev adapters and legacy tests.
+    key = process.env.TERMUX_OS_PACKAGE_TOKEN || process.env.TERMUX_OS_SYSTEM_KEY || '',
     fetchImpl = fetch,
     timeoutMs = 20_000,
   } = {}) {
@@ -51,6 +54,133 @@ export class FrameworkAssets {
       this.lastError = String(error?.message ?? error);
       return { available: false, error: 'framework_unavailable', detail: this.lastError, assets: [] };
     }
+  }
+
+  /** v2 inventory: Declaration, Payload, Selection, and runtime are separate facts. */
+  async inventoryV2() {
+    try {
+      const response = await this.call('/api/assets/v2');
+      if (!response.ok) {
+        const error = new Error(response.data?.detail || response.data?.error || `HTTP ${response.status}`);
+        error.code = response.data?.error || 'framework_request_failed';
+        error.status = response.status;
+        throw error;
+      }
+      this.lastError = null;
+      return {
+        available: true,
+        schema: response.data.schema ?? 'termux-os.asset-inventory.v2',
+        generation: response.data.generation ?? null,
+        assets: Array.isArray(response.data.assets) ? response.data.assets : [],
+        declarations: Array.isArray(response.data.declarations) ? response.data.declarations : [],
+        payloads: Array.isArray(response.data.payloads) ? response.data.payloads : [],
+        selections: Array.isArray(response.data.selections) ? response.data.selections : [],
+        errors: response.data.declaration_errors ?? [],
+      };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: error?.code ?? 'framework_unavailable', status: error?.status ?? null, detail: this.lastError,
+        generation: null, assets: [], declarations: [], payloads: [], selections: [] };
+    }
+  }
+
+  async declarationsV2() {
+    try {
+      const response = await this.call('/api/assets/v2/declarations');
+      if (!response.ok) {
+        const error = new Error(response.data?.detail || response.data?.error || `HTTP ${response.status}`);
+        error.code = response.data?.error || 'framework_request_failed';
+        error.status = response.status;
+        throw error;
+      }
+      return { available: true, ...response.data };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: error?.code ?? 'framework_unavailable', status: error?.status ?? null,
+        detail: this.lastError, declarations: [], packages: [] };
+    }
+  }
+
+  async payloadsV2() {
+    try {
+      const response = await this.call('/api/assets/v2/payloads');
+      if (!response.ok) {
+        const error = new Error(response.data?.detail || response.data?.error || `HTTP ${response.status}`);
+        error.code = response.data?.error || 'framework_request_failed';
+        error.status = response.status;
+        throw error;
+      }
+      return { available: true, ...response.data };
+    } catch (error) {
+      this.lastError = String(error?.message ?? error);
+      return { available: false, error: error?.code ?? 'framework_unavailable', status: error?.status ?? null,
+        detail: this.lastError, payloads: [], selections: [] };
+    }
+  }
+
+  async resolutionV2(id, { verify = false } = {}) {
+    return this.call(`/api/assets/v2/resolutions/${encodeURIComponent(id)}${verify ? '?verify=1' : ''}`, {
+      timeoutMs: verify ? 180_000 : this.timeoutMs,
+    });
+  }
+
+  createTransfer({ type = 'pull', assetId, variantId = 'generic', files, expectedGeneration = undefined,
+    select = true, headers = {}, metadata = {}, idempotencyKey = crypto.randomUUID() } = {}) {
+    return this.call('/api/assets/v2/transfers', {
+      method: 'POST',
+      body: {
+        type, asset_id: assetId, variant_id: variantId, files, expected_generation: expectedGeneration,
+        select, headers, metadata,
+      },
+      headers: { 'Idempotency-Key': idempotencyKey },
+      timeoutMs: this.timeoutMs,
+    });
+  }
+
+  runTransfer(id, { files, headers } = {}) {
+    return this.call(`/api/assets/v2/transfers/${encodeURIComponent(id)}/run`, {
+      method: 'POST', body: { ...(files ? { files } : {}), ...(headers ? { headers } : {}) }, timeoutMs: 3_600_000,
+    });
+  }
+
+  transferOperation(id) {
+    return this.call(`/api/assets/v2/operations/${encodeURIComponent(id)}`);
+  }
+
+  cancelTransfer(id) {
+    return this.call(`/api/assets/v2/transfers/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} });
+  }
+
+  verifyPayloadV2(id) {
+    return this.call(`/api/assets/v2/payloads/${encodeURIComponent(id)}/verify`, { method: 'POST', body: {}, timeoutMs: 180_000 });
+  }
+
+  deleteImpactV2(id) {
+    return this.call(`/api/assets/v2/delete-impact/${encodeURIComponent(id)}`);
+  }
+
+  deletePayloadV2(id, { expectedGeneration, detach = [] } = {}) {
+    return this.call(`/api/assets/v2/payloads/${encodeURIComponent(id)}/delete`, {
+      method: 'POST', body: { expected_generation: expectedGeneration, detach }, timeoutMs: 120_000,
+    });
+  }
+
+  setSelectionV2(assetId, { variantId = 'generic', payloadId = null, expectedGeneration } = {}) {
+    return this.call(`/api/assets/v2/selections/${encodeURIComponent(assetId)}`, {
+      method: 'PUT', body: { variant_id: variantId, payload_id: payloadId, expected_generation: expectedGeneration },
+    });
+  }
+
+  async uploadTransferFile(id, index, readable, { contentLength = undefined, contentType = 'application/octet-stream' } = {}) {
+    if (!this.configured) throw new Error('Framework connection is not configured');
+    const response = await this.fetchImpl(`${this.base}/api/assets/v2/transfers/${encodeURIComponent(id)}/files/${index}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${this.key}`, 'Content-Type': contentType,
+        ...(contentLength === undefined ? {} : { 'Content-Length': String(contentLength) }) },
+      body: readable, duplex: 'half', signal: AbortSignal.timeout(3_600_000),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { status: response.status, ok: response.ok, data };
   }
 
   async packages() {
@@ -155,6 +285,19 @@ export class FrameworkAssets {
     const response = await this.fetchImpl(`${this.base}/api/assets/import`, {
       method: 'POST', headers, body: readable, duplex: 'half',
       signal: AbortSignal.timeout(3_600_000),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { status: response.status, ok: response.ok, data };
+  }
+
+  /** v2 archive import creates Payload Objects only; it never registers a declaration. */
+  async importArchiveV2(readable, { contentType = 'application/gzip', contentLength = undefined } = {}) {
+    if (!this.configured) throw new Error('Framework connection is not configured');
+    const response = await this.fetchImpl(`${this.base}/api/assets/v2/imports`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.key}`, 'Content-Type': contentType,
+        ...(contentLength ? { 'Content-Length': String(contentLength) } : {}) },
+      body: readable, duplex: 'half', signal: AbortSignal.timeout(3_600_000),
     });
     const data = await response.json().catch(() => ({}));
     return { status: response.status, ok: response.ok, data };

@@ -130,6 +130,30 @@ test('summary is closed over the three cards', view.summary.total === 3
 test('usage is declaration metadata, not a second package card', sense?.usage.count === 1 && view.packages.filter((item) => item.repository.includes('sensevoice')).length === 1);
 test('package and upstream versions are exposed separately', sense?.package_version === '4.0.0'
   && sense.upstream_revision === senseRevision && sense.version_kind === 'package_version');
+test('required and optional declarations expose the same update capability', sense?.actions.update === true
+  && camp?.actions.update === true);
+
+const hashDriftManifests = structuredClone(manifests);
+hashDriftManifests[0].manifest.assets.provides[1].source.files[0].sha256 = sha('q');
+const hashDriftView = buildModelPackages({ catalog, manifests: hashDriftManifests,
+  inventory: { available: true, assets: [] }, declarations: { available: true, declarations: [] } });
+const hashDriftSense = hashDriftView.packages.find((item) => item.repository.includes('sensevoice'));
+test('source-coordinate mapping survives revision and digest drift', hashDriftSense?.files.find((file) => file.path === 'model.onnx')?.asset_ids.includes('model.sensevoice.graph'));
+
+const predecessorId = sha('p');
+const staleView = buildModelPackages({
+  catalog,
+  manifests,
+  inventory: { available: true, generation: 12, assets: [{ id: 'model.sensevoice.graph', path: senseRoot,
+    package_id: 'sense.package', payload_id: predecessorId, payload_state: 'ready', ready: true, target: 'generic' }],
+    payloads: [{ payload_id: predecessorId, files: [{ path: 'model.onnx', size: 3, sha256: sha('q') }] }] },
+  declarations: { available: true, declarations: [] },
+});
+const staleSense = staleView.packages.find((item) => item.repository.includes('sensevoice'));
+const staleGraph = staleSense?.assets.find((item) => item.id === 'model.sensevoice.graph');
+test('selected predecessor is stale and remains explicitly updateable', staleSense?.status === 'partial'
+  && staleSense?.actions.update === true && staleGraph?.ready === false
+  && staleGraph?.payload_state === 'partial' && staleSense.files.find((file) => file.path === 'model.onnx')?.local.state === 'stale');
 
 const missingProviderView = buildModelPackages({
   catalog,
@@ -154,8 +178,9 @@ const absentProviderView = buildModelPackages({
 });
 const absentSense = absentProviderView.packages.find((item) => item.repository.includes('sensevoice'));
 const absentGraph = absentSense?.assets.find((item) => item.id === 'model.sensevoice.graph');
-test('absent installable provider is visible as a provider-install action', absentGraph?.provider_state === 'absent'
-  && absentGraph.installable === true && absentGraph.action === 'install_provider' && absentSense.actions.download === true);
+test('unloaded declared provider remains directly fetchable without an install gate', absentGraph?.provider_state === 'absent'
+  && absentGraph.declared === true && absentGraph.installable === false
+  && absentGraph.fetchable === true && absentGraph.action === 'fetch' && absentSense.actions.download === true);
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`${count}/${count} assertions passed`);

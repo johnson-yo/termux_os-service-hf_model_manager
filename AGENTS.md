@@ -13,12 +13,20 @@ current raw contract in `docs/CONSUMER_API.md`.
   version/revision, file list, sizes, sha256, and each file's own provenance
   and package-local path. The card identity is `(source, repository)`; the
   `package_id` is displayed, never parsed as a source hint.
-- Framework Core owns raw Asset download/resume/retry/progress, verification,
-  shared-store paths, generic archive import, and generic purge.
+- The Asset Package owns Asset declaration/registration and Package-install
+  provisioning. This replaceable Manager owns the payload lifecycle after
+  registration: source selection, download/resume/retry/progress, verification,
+  storage, update, delete confirmation, and deletion.
+- Framework Core may provide policy-free path, transfer, integrity, archive, and
+  atomic-storage primitives. Core must not gate those operations because an
+  Asset is required/optional, because its declaring Package is loaded/unloaded,
+  or because a consumer declaration exists. Payload deletion must not silently
+  unregister the Asset declaration.
 - `.models/<owner>/<repository>` is read through Framework's current
   declaration seam. This Package does not persist a consumer ledger.
-- The Package never writes the shared model store directly and never deletes
-  adjacent consumer caches.
+- The Manager may write its designated raw payload root, directly or through
+  Core primitives, and never deletes adjacent consumer caches or runtime/ctx
+  artifacts.
 - Do not modify termux-speech business code in this Package task. Record its
   migration needs in the final numbered report instead.
 

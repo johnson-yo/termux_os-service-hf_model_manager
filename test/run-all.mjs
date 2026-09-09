@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const FILES = ['model-package-test.mjs', 'adapter-test.mjs', 'download-test.mjs', 'integration-test.mjs', 'boundary-test.mjs', 'webui-test.mjs', 'boot-test.mjs', 'browser-test.mjs'];
+const FILES = ['model-package-test.mjs', 'adapter-test.mjs', 'source-adapter-test.mjs', 'download-test.mjs', 'delete-test.mjs', 'integration-test.mjs', 'boundary-test.mjs', 'webui-test.mjs', 'boot-test.mjs', 'browser-test.mjs'];
 let failed = 0;
 let total = 0;
 for (const file of FILES) {
