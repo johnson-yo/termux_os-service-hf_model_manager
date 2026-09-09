@@ -6,8 +6,12 @@
  * [PROTOCOL]: No network or shared store is used.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { FrameworkAssets } from '../service/framework.mjs';
-import { Operations, STAGES, COMPLETE } from '../service/operations.mjs';
+import { Operations, STAGES, COMPLETE, OPERATIONS_SCHEMA } from '../service/operations.mjs';
 
 let failures = 0;
 let count = 0;
@@ -47,6 +51,33 @@ test('operation reaches complete with real byte completion', ops.get(started.ope
   && ops.get(started.operation.operation_id).resumed === true
   && ops.get(started.operation.operation_id).resume_from_bytes === 2);
 test('stages contain only raw Asset lifecycle phases', STAGES.join(',') === 'resolving,downloading,verifying,importing,deleting,done');
+
+const operationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-operations-'));
+const operationFile = path.join(operationRoot, 'operations.v1.json');
+const seedOperations = new Operations({ file: operationFile });
+const saved = seedOperations.start('download', 'huggingface:owner/repo', async () => new Promise(() => {}), {
+  stages: STAGES, progressPrecision: 'bytes', resumable: true,
+});
+const persisted = JSON.parse(fs.readFileSync(operationFile, 'utf8'));
+const reloadedOperations = new Operations({ file: operationFile });
+const pending = reloadedOperations.pending()[0];
+const pendingStateBeforeResume = pending?.state;
+let resumedRuns = 0;
+reloadedOperations.resume(saved.operation.operation_id, async ({ setStage }) => {
+  resumedRuns += 1;
+  setStage('verifying');
+  return { resumed: true };
+});
+await new Promise((resolve) => setTimeout(resolve, 10));
+const persistedAfterResume = JSON.parse(fs.readFileSync(operationFile, 'utf8'));
+test('resumable download state survives Manager process reload', persisted.schema === OPERATIONS_SCHEMA
+  && pending?.operation_id === saved.operation.operation_id && pending?.resumable === true
+  && pendingStateBeforeResume === 'running' && persisted.operations[0]?.state === 'running');
+test('reloaded download resumes and persists its terminal result', resumedRuns === 1
+  && reloadedOperations.get(saved.operation.operation_id)?.state === COMPLETE
+  && persistedAfterResume.operations[0]?.state === COMPLETE
+  && persistedAfterResume.operations[0]?.result?.resumed === true);
+fs.rmSync(operationRoot, { recursive: true, force: true });
 
 const ledgerErrorAdapter = new FrameworkAssets({ base: 'http://core', key: 'system', fetchImpl: async () => ({
   ok: false, status: 500, json: async () => ({ error: 'payload_ledger_corrupt', detail: 'bad ledger' }),

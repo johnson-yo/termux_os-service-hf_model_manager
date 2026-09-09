@@ -1,4 +1,4 @@
-# Dependency maturity — Raw Model Package Manager 0.4.7
+# Dependency maturity — Raw Model Package Manager 0.4.8
 
 The manager is optional by design. It improves discovery and lifecycle UX but
 is not required for a consumer to access its own declared raw Asset.
@@ -12,6 +12,7 @@ is not required for a consumer to access its own declared raw Asset.
 | Registry unavailable | package cards are `unknown` | do not call them `none`; retry later |
 | Framework inventory unavailable | local status is `unknown` | retry the read-only seam; do not claim completeness or turn the outage into a lifecycle prohibition |
 | Framework is still booting | a failed snapshot is retried after a short backoff | do not keep the startup failure cached |
+| Manager or Framework restarts during download/update | the Manager reloads its private resumable operation and continues from Core's verified transfer state | keep the operation id and poll it again; import/delete/verify operations are intentionally not resumed |
 | malformed `.models` path | declaration error is visible | fix the owning Package; do not infer usage |
 | current declaration exists | Manager shows a warning and requires explicit confirmation | the user decides whether to remove the payload; the declaration is usage information, not a Core delete lock |
 | Payload has no current catalog card | Manager exposes it through the Core Payload inventory and the same confirmation flow | inspect/verify/delete the orphan explicitly; do not silently discard it |
@@ -30,5 +31,5 @@ permission check. A future consumer may request an absolute raw file path and
 then apply its own business/runtime policy. This package must not become that
 runtime policy.
 
-The 0.4.7 release is packaged and device-tested, and its public source is
+The 0.4.8 release is packaged and device-tested, and its public source is
 published through the GitHub tag and Cloudflare Package Registry.

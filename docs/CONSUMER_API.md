@@ -11,7 +11,7 @@ policy-free technical primitives, but Core must not actively decide whether a
 Manager may download, update, verify, or delete based on `optional`, provider
 load state, or consumer declarations. A payload operation never unregisters
 the Asset Package. The contract below is the target correction for the current
-`0.4.7` implementation; the old `Framework-only` behavior is non-conforming
+`0.4.8` implementation; the old `Framework-only` behavior is non-conforming
 and must not be extended.
 
 ## Discovery
@@ -87,7 +87,11 @@ Operation snapshots expose `package_key`, `current_asset`,
 `current_provider`, `current_file`, real `bytes_done`/`bytes_total`,
 byte-precision `progress`, `speed_bps`, the Framework `route`,
 `retry_count`, `resumed`, and `resume_from_bytes`. A stage-only operation does
-not fabricate a byte percentage.
+not fabricate a byte percentage. Manager-owned download and update operations
+are persisted in the Package's private persistent directory and are resumed
+after a Manager or Framework restart; import, delete, and verify operations
+remain non-resumable because their in-flight request or confirmation is not
+reconstructible.
 
 ## Lifecycle rules
 

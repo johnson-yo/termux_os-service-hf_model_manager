@@ -9,6 +9,7 @@
 export async function register(context) {
   const port = context.ports.get('http')?.port;
   const serviceBase = `http://127.0.0.1:${port}`;
+  const operationsFile = context.configFile('operations.v1.json');
 
   context.services.register({
     id: 'hf-model-manager',
@@ -18,6 +19,7 @@ export async function register(context) {
     cwd: context.root,
     env: {
       STATUS_FILE: `${context.frameworkRoot}/.runtime/services/${context.services.id('hf-model-manager')}/status.json`,
+      OPERATIONS_FILE: operationsFile,
     },
     health: { type: 'http', url: `${serviceBase}/health`, timeout_ms: 1500 },
     stop_timeout_ms: 5000,

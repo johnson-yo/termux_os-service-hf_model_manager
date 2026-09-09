@@ -31,7 +31,7 @@ const SYSTEM_KEY = process.env.TERMUX_OS_SYSTEM_KEY || '';
 
 const registry = new RegistryAdapter({ base: REGISTRY_URL });
 const local = new FrameworkAssets();
-const operations = new Operations();
+const operations = new Operations({ file: process.env.OPERATIONS_FILE || '' });
 const events = new EventLog();
 const deleteCoordinator = createDeleteCoordinator({ local });
 const v2Unsupported = (value) => [404, 405, 501].includes(Number(value?.status));
@@ -143,6 +143,43 @@ const refreshCard = async (key, { force = true } = {}) => {
 // server below only chooses the package; Core owns provider jobs, bytes,
 // resume, hashes, and the final payload path.
 const downloadPackage = createDownloadPackage({ local, refreshCard });
+
+const RECOVERY_RETRY_MS = 5_000;
+let recoveryInFlight = false;
+
+/** Resume only the Manager-owned package transfers that were explicitly marked resumable. */
+const recoverPendingOperations = async () => {
+  if (recoveryInFlight) return;
+  recoveryInFlight = true;
+  let retry = false;
+  try {
+    for (const operation of operations.pending()) {
+      if (!['download', 'update'].includes(operation.action)) {
+        operations.fail(operation.operation_id, new Error(`unsupported resumable action: ${operation.action}`));
+        continue;
+      }
+      const card = await refreshCard(operation.asset_id, { force: true });
+      if (!card || card.status === 'unknown') {
+        // Keep the durable operation visible and try again when Registry/Core
+        // becomes available; an outage is not a completed failure.
+        retry = true;
+        continue;
+      }
+      const resumed = operations.resume(operation.operation_id,
+        ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress, { update: operation.action === 'update' }));
+      if (!resumed.ok) console.warn(`[hf-model-manager] operation recovery skipped: ${operation.operation_id} (${resumed.error})`);
+    }
+  } catch (error) {
+    retry = operations.pending().length > 0;
+    console.warn(`[hf-model-manager] operation recovery deferred: ${String(error?.message ?? error)}`);
+  } finally {
+    recoveryInFlight = false;
+    if (retry && operations.pending().length) {
+      const timer = setTimeout(() => { void recoverPendingOperations(); }, RECOVERY_RETRY_MS);
+      timer.unref?.();
+    }
+  }
+};
 
 const existingPath = (p) => {
   let current = path.resolve(p);
@@ -384,7 +421,7 @@ const server = http.createServer(async (req, res) => {
       const update = route.endsWith('/update');
       const started = operations.start(update ? 'update' : 'download', card.key,
         ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress, { update }), {
-        stages: STAGES, progressPrecision: 'bytes',
+        stages: STAGES, progressPrecision: 'bytes', resumable: true,
       });
       return operationReply(res, started);
     }
@@ -467,4 +504,5 @@ server.listen(PORT, '127.0.0.1', () => {
   }
   console.log(`[hf-model-manager] listening on 127.0.0.1:${bound}`);
   console.log(`[hf-model-manager] registry=${REGISTRY_URL} store=${STORE}`);
+  void recoverPendingOperations();
 });

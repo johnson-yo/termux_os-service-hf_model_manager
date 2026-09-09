@@ -62,7 +62,7 @@ The Framework package prefix is:
 | POST | `/payload/delete-plan?id=...` | show impact for a Payload without requiring a catalog card |
 | DELETE/POST | `/payload/delete?id=...` | require the plan token, then delete one Payload; returns an operation |
 | POST | `/package/import` | Manager-owned raw Asset archive import; may use Core safety primitives |
-| GET | `/operations` and `/operation?id=...` | operation state and real byte progress |
+| GET | `/operations` and `/operation?id=...` | operation state and real byte progress; download/update resumes after Manager restart |
 | GET | `/events?after=...` | bounded cursor feed |
 
 Each Registry file carries `source`, `repository`, immutable `revision`,
