@@ -256,7 +256,10 @@ const providersFor = (records, byId, catalogProvides = [], generation = null, pa
     const installed = local?.payload_state === 'ready' || Boolean(local?.path && local?.ready !== false);
     const transferFiles = resolveTransferFiles(mappings.map((item) => ({
       ...item.record,
-      path: item.record?.path ?? item.path,
+      // Registry `path` is the catalog's storage/display coordinate. Core's
+      // Payload manifest must use the Declaration-local file coordinate so
+      // commit validation compares the same namespace on both sides.
+      path: item.path,
       url: item.record?.url ?? transferUrl(item.record),
     })).filter((file, index, list) => list.findIndex((other) => coordinateKey(other) === coordinateKey(file)) === index));
     return {

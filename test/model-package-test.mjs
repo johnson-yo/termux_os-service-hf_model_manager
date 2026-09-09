@@ -122,6 +122,13 @@ test('manifest-only stale file is not added to the Registry file list', !sense?.
 test('CAM++ keeps generic and fixed-window paths distinct', camp?.files.length === 2
   && new Set(camp.files.map((file) => file.path)).size === 2
   && camp.files[0].path !== camp.files[1].path);
+test('CAM++ transfer uses Declaration-local path while retaining Registry path', (() => {
+  const generic = camp?.assets.find((asset) => asset.id === 'model.campplus.graph');
+  const catalogFile = camp?.files.find((file) => file.path === 'generic/campplus.onnx');
+  return catalogFile?.local_path === 'generic/campplus.onnx'
+    && generic?.transfer_files?.[0]?.path === 'campplus.onnx'
+    && generic.transfer_files[0].url.endsWith('/graph/generic/campplus.onnx');
+})());
 test('CAM++ partial state is based on the exact mapped .part path', camp?.status === 'partial'
   && camp.files.some((file) => file.local.state === 'partial' && file.local.part_path.endsWith('campplus.onnx.part')));
 test('FireRedVAD has two raw files and is complete', fire?.files.length === 2 && fire.status === 'complete');
