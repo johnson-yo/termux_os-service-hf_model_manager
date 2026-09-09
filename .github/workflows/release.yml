@@ -102,7 +102,7 @@ jobs:
             process.exit(bad ? 1 : 0);
           '
         env:
-          FRAMEWORK_REF: '0.2.39'
+          FRAMEWORK_REF: '0.3.4'
 
       - name: Host test suites
         # ⛔ 不要 glob `test/*.mjs`：`consumer-fixture.mjs` 是给消费方用的夹具，
