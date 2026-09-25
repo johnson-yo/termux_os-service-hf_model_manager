@@ -101,8 +101,8 @@ export async function register(context) {
   byId('GET', '/package', (id) => `/package?id=${id}`);
   byId('GET', '/model', (id) => `/package?id=${id}`);
   byId('GET', '/file', (id, query) => `/file?id=${id}&path=${encodeURIComponent(query.get('path') || '')}`);
-  byId('POST', '/package/download', (id) => `/package/download?id=${id}`, 3_600_000);
-  byId('POST', '/model/download', (id) => `/package/download?id=${id}`, 3_600_000);
+  byId('POST', '/package/download', (id, query) => `/package/download?id=${id}${query.get('asset') ? `&asset=${encodeURIComponent(query.get('asset'))}` : ''}`, 3_600_000);
+  byId('POST', '/model/download', (id, query) => `/package/download?id=${id}${query.get('asset') ? `&asset=${encodeURIComponent(query.get('asset'))}` : ''}`, 3_600_000);
   byId('POST', '/package/update', (id) => `/package/update?id=${id}`, 3_600_000);
   byId('POST', '/model/update', (id) => `/package/update?id=${id}`, 3_600_000);
   byId('POST', '/package/verify', (id) => `/package/verify?id=${id}`, 3_600_000);

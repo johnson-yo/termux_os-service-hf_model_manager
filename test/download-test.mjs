@@ -6,7 +6,7 @@
  * [PROTOCOL]: No Registry, device, or shared-store access is allowed here.
  */
 
-import { createDownloadPackage } from '../service/download.mjs';
+import { downloadScope, createDownloadPackage } from '../service/download.mjs';
 
 let failures = 0;
 let count = 0;
@@ -208,5 +208,46 @@ const base = (overrides = {}) => ({
   test('G failed provider Package job blocks payload fetch', failed && !scenario.calls.includes('fetch:asset.tiny'));
 }
 
+{
+  const card = { assets: [
+    { id: 'frontend', optional: false, ready: true },
+    { id: 'ctx', optional: false, ready: false },
+    { id: 'graph', optional: true, ready: false },
+  ] };
+  test('a press fetches the required Assets first and leaves the large optional one alone',
+    JSON.stringify(downloadScope(card)) === JSON.stringify(['frontend', 'ctx']));
+  const done = { assets: card.assets.map((item) => (item.id === 'ctx' ? { ...item, ready: true } : item)) };
+  test('once every required Asset is ready, the same button reaches the optional ones',
+    downloadScope(done).includes('graph'));
+  test('an explicit asset is fetched alone', JSON.stringify(downloadScope(card, { asset: 'graph' })) === JSON.stringify(['graph']));
+  test('an update refreshes required Assets but does not fetch an optional one never installed',
+    JSON.stringify(downloadScope(card, { update: true })) === JSON.stringify(['frontend', 'ctx']));
+  test('an update does refresh an optional Asset that is installed',
+    downloadScope({ assets: [...card.assets.slice(0, 2), { id: 'graph', optional: true, installed: true }] }, { update: true }).includes('graph'));
+}
+{
+  // Core CAS-checks every transfer against the ledger generation; each commit advances it.
+  let generation = 20;
+  const seen = [];
+  const files = [{ path: 'a.bin', url: 'https://x.example/a.bin', size: 1, sha256: 'a'.repeat(64) }];
+  const cardAt = () => ({ key: 'pkg.multi', assets: ['frontend', 'ctx'].map((id) => ({
+    id, declared: true, fetchable: true, ready: false, optional: false, target: 'generic',
+    ledger_generation: generation, transfer_files: files,
+  })) });
+  const local = {
+    async createTransfer(input) {
+      seen.push(input.expectedGeneration);
+      if (input.expectedGeneration !== generation) return { ok: false, status: 409, data: { ok: false, error: 'generation_mismatch' } };
+      return { ok: true, status: 201, data: { operation: { operation_id: `op-${input.assetId}` } } };
+    },
+    async runTransfer() { generation += 1; return { ok: true, status: 200, data: { operation: { result: { bytes_done: 1, bytes_total: 1 } } } }; },
+    async resolutionV2(id) { return { ok: true, status: 200, data: { resolution: { id, ready: true } } }; },
+  };
+  const run = createDownloadPackage({ local, refreshCard: async () => cardAt(), sleepImpl: async () => {} });
+  let error = null;
+  await run(cardAt(), () => {}, () => {}, { update: true }).catch((caught) => { error = caught; });
+  test('a multi-Asset update gives each transfer the generation left by the previous commit',
+    !error && JSON.stringify(seen) === JSON.stringify([20, 21]));
+}
 console.log(`${count}/${count} assertions passed`);
 process.exit(failures ? 1 : 0);

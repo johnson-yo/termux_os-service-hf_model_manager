@@ -21,6 +21,9 @@ const normalizeFile = (file) => ({
   repository: typeof file?.repository === 'string' ? file.repository : null,
   revision: typeof file?.revision === 'string' ? file.revision : null,
   role: typeof file?.role === 'string' ? file.role : null,
+  // A catalog-owned Asset variant: which Asset id and which device target this file serves.
+  asset_id: typeof file?.asset_id === 'string' ? file.asset_id : null,
+  asset_target: typeof file?.asset_target === 'string' ? file.asset_target : null,
   size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
   sha256: typeof file?.sha256 === 'string' ? file.sha256.toLowerCase() : null,
 });
@@ -175,7 +178,9 @@ export const __test = { normalizeProject, normalizeVersion, normalizeFile, isRaw
 // ============================================================
 const { fileURLToPath } = await import('node:url');
 if (process.argv.includes('--self-test')
-  && process.argv[1] && new URL(import.meta.url).pathname === fileURLToPath(import.meta.url)) {
+  // ⚠ Compare against the entry file: the old guard compared this module with itself, so any
+  // importer run with --self-test exited here before its own tests started.
+  && process.argv[1] && (await import('node:path')).resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let fails = 0;
   const test = (name, condition) => { console.log(`${condition ? 'PASS' : 'FAIL'} ${name}`); if (!condition) fails++; };
   const adapter = new RegistryAdapter({ base: 'http://registry', fetchImpl: async () => ({

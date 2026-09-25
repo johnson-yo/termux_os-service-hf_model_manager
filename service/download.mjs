@@ -142,6 +142,26 @@ const waitForPackageJob = async ({ local, jobId, setStage, sleepImpl, now, timeo
 };
 
 /**
+ * Which Assets one press of "download" fetches.
+ *
+ * ⭐ Required first. A package can carry a large optional Asset next to the one a device needs
+ * (SenseVoice: a 937 MB source graph beside a ~505 MB per-device context); fetching both on every
+ * press spends the user's bandwidth on bytes their consumer never opens. Optional Assets follow
+ * once every required one is ready, so the same button still reaches them; `asset` names one
+ * explicitly. An update refreshes what is installed plus what is required — an optional Asset
+ * the user never fetched is not "updated" into existence.
+ */
+export const downloadScope = (card, { update = false, asset = null } = {}) => {
+  const all = (card?.assets ?? []).filter((item) => item?.id);
+  if (asset) return all.filter((item) => item.id === asset).map((item) => item.id);
+  const required = all.filter((item) => item.optional !== true);
+  const present = (item) => item.installed === true || Boolean(item.payload_id);
+  const chosen = update ? all.filter((item) => item.optional !== true || present(item))
+    : !required.some((item) => !item.ready) ? all : required;
+  return [...new Set(chosen.map((item) => item.id))];
+};
+
+/**
  * Build the package operation with injected dependencies. Keeping this pure
  * seam separate from the HTTP server makes the 409/202 state machine testable
  * without a device or a large model.
@@ -156,9 +176,12 @@ export const createDownloadPackage = ({
   progressIntervalMs = 750,
 } = {}) => {
   if (!local) throw new Error('download operation requires a Framework adapter');
-  return async (card, setStage = () => {}, setProgress = () => {}, { update = false } = {}) => {
-    const ids = [...new Set((card?.assets ?? []).map((asset) => asset.id).filter(Boolean))];
-    if (!ids.length) throw operationError('no_asset_provider', 'raw package has no declared Asset provider');
+  return async (card, setStage = () => {}, setProgress = () => {}, { update = false, asset = null } = {}) => {
+    const ids = downloadScope(card, { update, asset });
+    if (!ids.length) {
+      throw asset ? operationError('unknown_asset', `${asset} is not an Asset of this package`)
+        : operationError('no_asset_provider', 'raw package has no declared Asset provider');
+    }
     let currentCard = card;
     const results = [];
 
@@ -288,7 +311,10 @@ export const createDownloadPackage = ({
       } finally {
         stopWatching();
       }
-      const afterFetch = await current(id);
+      // ⭐ Re-read after every commit: it advanced the ledger generation, and the next Asset's
+      // transfer is CAS-checked against that generation. Reusing the card from the start of the
+      // operation made every multi-Asset update fail on its second Asset with generation_mismatch.
+      const afterFetch = assetCandidate(await refresh(), id);
       await verifyReady(afterFetch ?? candidate);
     }
 

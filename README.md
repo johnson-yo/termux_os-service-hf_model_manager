@@ -5,8 +5,12 @@ download and resume, verification, install, update, and deletion with a usage wa
 
 The manager owns payload lifecycle only. The Android App owns consumer-specific preprocessing,
 runtime preparation, inference, and readiness; the manager does not execute models or apply
-consumer policy. Target-specific contexts remain separate assets and are not added to the raw-model
-mapping.
+consumer policy.
+
+An Asset declared with `target: "device"` has one variant per device target, and its target list
+lives in the catalog: each catalog file names the Asset id and target it serves. The manager shows
+and downloads only this device's target, so adding a target is an upload plus catalog rows, with no
+Package release.
 
 Install through the Termux-OS Package Registry. Development checks are available in `test/`.
 

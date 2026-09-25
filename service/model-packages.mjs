@@ -327,8 +327,55 @@ const declarationsFor = (project, declarations) => (declarations?.declarations ?
   .filter((item) => item.source === project.source && item.identity === project.repository)
   .map((item) => ({ package_id: item.package_id, active_version: item.active_version, path: item.path }));
 
+/**
+ * Catalog-owned variants (`target: "device"` declarations).
+ *
+ * ⭐ The Package declares the Asset once; Core expands it to this device's target. The catalog
+ * row carries `asset_id` + `asset_target`, so the file-to-Asset mapping comes from the catalog
+ * instead of from a manifest that would have to enumerate every target. Adding a target is then
+ * an upload plus catalog rows — no Package release.
+ *
+ * ⚠ A row for another device's target is dropped from this device's card: a V79 phone offered
+ * the V73 context would download 500 MB it can never load. When no local declaration names the
+ * Asset at all, every row stays visible so the card can still explain what exists.
+ */
+const variantDeclarations = (declarations) => (declarations?.declarations ?? [])
+  .filter((item) => item?.asset_id && item?.variant_id);
+
+const forThisDevice = (files, declared) => (files ?? []).filter((file) => {
+  if (!file?.asset_id || !file?.asset_target) return true;
+  const sameAsset = declared.filter((item) => item.asset_id === file.asset_id);
+  return !sameAsset.length || sameAsset.some((item) => item.variant_id === file.asset_target);
+});
+
+const catalogVariantRecords = (files, declared) => (files ?? []).flatMap((file) => {
+  if (!file?.asset_id || !file?.asset_target) return [];
+  const declaration = declared.find((item) => item.asset_id === file.asset_id && item.variant_id === file.asset_target);
+  const localPath = localOf(file);
+  if (!declaration || !localPath) return [];
+  return [{
+    source: sourceOf(file) ?? 'huggingface',
+    repository: repoOf(file),
+    path: localPath,
+    remote_path: remoteOf(file),
+    url: transferUrl({ ...file, path: localPath }),
+    revision: file.revision ?? null,
+    role: typeof file.role === 'string' ? file.role : null,
+    size: Number.isFinite(Number(file.size)) ? Number(file.size) : null,
+    sha256: typeof file.sha256 === 'string' ? file.sha256.toLowerCase() : null,
+    asset_id: declaration.asset_id,
+    asset_package_id: declaration.package_id ?? null,
+    target: declaration.variant_id,
+    payload: declaration.payload ?? null,
+    optional: declaration.optional === true,
+  }];
+});
+
 const buildCard = (project, { manifestRecords, byId, payloads, declarations, inventoryGeneration = null, registryAvailable, frameworkAvailable = true }) => {
-  const records = mergeFiles(project, manifestRecords);
+  const declared = variantDeclarations(declarations);
+  const deviceFiles = forThisDevice(project.latest?.raw_files, declared);
+  const scoped = { ...project, latest: project.latest ? { ...project.latest, raw_files: deviceFiles } : project.latest };
+  const records = mergeFiles(scoped, [...manifestRecords, ...catalogVariantRecords(deviceFiles, declared)]);
   const providers = providersFor(records, byId, project.provides, inventoryGeneration, payloads);
   const files = records.map((file) => ({ ...file, local: localFileState(file, providers) }));
   const resolvedProviders = enrichProviders(providers, files);
@@ -420,7 +467,7 @@ export function buildModelPackages({
 
 export const findModelPackage = (value, key) => (value?.packages ?? []).find((item) => item.key === key) ?? null;
 
-export const __test = { manifestFileRecords, mergeFiles, localFileState, coordinateKey, sameCoordinate, transferUrl };
+export const __test = { manifestFileRecords, mergeFiles, localFileState, coordinateKey, sameCoordinate, transferUrl, forThisDevice, catalogVariantRecords };
 
 // ============================================================
 // Self-test: node service/model-packages.mjs --self-test

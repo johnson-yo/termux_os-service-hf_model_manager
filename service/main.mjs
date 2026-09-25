@@ -420,7 +420,9 @@ const server = http.createServer(async (req, res) => {
       if (!card) return send(res, 404, { ok: false, error: 'unknown_package' });
       const update = route.endsWith('/update');
       const started = operations.start(update ? 'update' : 'download', card.key,
-        ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress, { update }), {
+        ({ setStage, setProgress }) => downloadPackage(card, setStage, setProgress, {
+          update, asset: parsed.searchParams.get('asset') || null,
+        }), {
         stages: STAGES, progressPrecision: 'bytes', resumable: true,
       });
       return operationReply(res, started);

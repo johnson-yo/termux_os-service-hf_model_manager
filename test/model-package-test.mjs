@@ -189,6 +189,45 @@ test('unloaded declared provider remains directly fetchable without an install g
   && absentGraph.declared === true && absentGraph.installable === false
   && absentGraph.fetchable === true && absentGraph.action === 'fetch' && absentSense.actions.download === true);
 
+{
+  // Catalog-owned variants: the catalog lists both targets, the device declares one.
+  const rev = 'c'.repeat(40);
+  const row = (target, name, size) => ({
+    kind: 'model_file', name, path: name, local_path: name, remote_path: `ctx/t267/${target}/${name}`,
+    source: 'huggingface', repository: 'owner/sv', revision: rev, size, sha256: 'd'.repeat(64),
+    asset_id: 'model.sv16.ctx', asset_target: target,
+  });
+  const catalog = { available: true, projects: [{ source: 'huggingface', repository: 'owner/sv', package_id: 'pkg.sv', types: ['asset'], display_name: 'SV', latest: {
+    version: '4.1.0', revision: rev, status: 'verified', raw_files: [
+      row('android-arm64-v73-qnn249', 'model.bin', 500), row('android-arm64-v79-qnn249', 'model.bin', 501),
+      { kind: 'model_file', name: 'am.mvn', path: 'am.mvn', local_path: 'am.mvn', remote_path: 'am.mvn', source: 'huggingface', repository: 'up/frontend', revision: rev, size: 7, sha256: 'e'.repeat(64) },
+    ],
+  }, latest_installable: null, provides: [] }] };
+  const declaration = (variant) => ({ asset_id: 'model.sv16.ctx', variant_id: variant, package_id: 'pkg.sv', payload: 'sv16', optional: false,
+    target: { id: variant }, target_mode: 'device', source: null });
+  const card = buildModelPackages({ catalog, inventory: { available: true, assets: [] },
+    declarations: { available: true, declarations: [declaration('android-arm64-v79-qnn249')] } }).packages[0];
+  const ctx = card.assets.find((item) => item.id === 'model.sv16.ctx');
+  test('a device sees only its own target of a catalog-owned Asset',
+    card.files.filter((file) => file.asset_ids.includes('model.sv16.ctx')).length === 1
+    && !card.files.some((file) => file.remote_path?.includes('v73')));
+  test('shared untargeted files stay on the card', card.files.some((file) => file.path === 'am.mvn'));
+  test('the device variant is fetchable without the Package listing any file',
+    ctx?.declared === true && ctx?.fetchable === true && ctx?.target === 'android-arm64-v79-qnn249');
+  test('its transfer lands under the declaration-local name from the target-specific remote path',
+    ctx?.transfer_files?.length === 1 && ctx.transfer_files[0].path === 'model.bin'
+    && ctx.transfer_files[0].url.endsWith('/ctx/t267/android-arm64-v79-qnn249/model.bin') && ctx.transfer_files[0].size === 501);
+  const other = buildModelPackages({ catalog, inventory: { available: true, assets: [] },
+    declarations: { available: true, declarations: [declaration('android-arm64-v73-qnn249')] } }).packages[0]
+    .assets.find((item) => item.id === 'model.sv16.ctx');
+  test('another device resolves the other target from the same catalog rows',
+    other?.transfer_files?.[0]?.url.includes('android-arm64-v73-qnn249') && other.transfer_files[0].size === 500);
+  const none = buildModelPackages({ catalog, inventory: { available: true, assets: [] },
+    declarations: { available: true, declarations: [declaration('android-arm64-v75-qnn249')] } }).packages[0]
+    .assets.find((item) => item.id === 'model.sv16.ctx');
+  test('a target the catalog does not have yet is not fetchable, and says so',
+    !none?.fetchable);
+}
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`${count}/${count} assertions passed`);
 process.exit(failures ? 1 : 0);

@@ -141,3 +141,17 @@ that needs a raw path can use its own declared Asset dependency and a generic
 Core read/resolve contract, but that does not transfer payload lifecycle
 ownership to Core. The Manager remains a replaceable catalog and payload
 manager; it does not own consumer runtime policy.
+
+## Catalog-owned device variants
+
+When an Asset Package declares `assets.provides[].target: "device"`, Framework Core expands the
+declaration to this device's concrete target (for example `android-arm64-v79-qnn249`) and the
+declaration carries no files. The manager then maps catalog rows whose `asset_id` and
+`asset_target` equal that declaration and downloads them under the declaration's local file names.
+Rows for other targets are omitted from this device's card. A target with no catalog rows is
+reported as not fetchable rather than substituted.
+
+A package download fetches the required Assets first. Optional Assets (for example a large source
+graph next to a per-device context) follow once every required Asset is ready, so the same action
+still reaches them; `?asset=<id>` fetches one Asset explicitly, and an update covers every Asset
+whose catalog coordinates changed.
